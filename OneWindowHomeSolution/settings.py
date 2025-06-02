@@ -12,6 +12,9 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 from pathlib import Path
 
+from dotenv import load_dotenv
+import os
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -20,16 +23,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-from decouple import config
 
-SECRET_KEY = config(
-    "django-insecure-=f5c1$3r(#ypf6hllwozc!!3um3ht#k^c1)ff@s%v71^u-a_*="
-)
+
+load_dotenv()
+
+SECRET_KEY = os.getenv("SECRET_KEY")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-from decouple import config
 
-DEBUG = config("True")
+
+DEBUG = os.getenv("DEBUG")
 
 ALLOWED_HOSTS = ["*"]
 
@@ -91,18 +94,18 @@ WSGI_APPLICATION = "OneWindowHomeSolution.wsgi.application"
 
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
-from decouple import config
 
-SECRET_KEY = config("SECRET_KEY")
-DEBUG = config("DEBUG", default=False, cast=bool)
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+DEBUG = os.getenv("DEBUG", default=False, cast=bool)
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.mysql",
-        "NAME": config("carwashmgt"),  # Replace with your default database name
-        "USER": config("root"),
-        "PASSWORD": config("srushti12"),
-        "HOST": config("localhost"),
-        "PORT": config("3306"),
+        "NAME": os.getenv("NAME"),  # Replace with your default database name
+        "USER": os.getenv("USER"),
+        "PASSWORD": os.getenv("PASSWORD"),
+        "HOST": os.getenv("HOST"),
+        "PORT": os.getenv("PORT"),
         "OPTIONS": {
             "charset": "utf8mb4",
         },
@@ -148,17 +151,17 @@ STATIC_URL = "static/"
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
-from decouple import config
+
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = config("smtp.gmail.com")
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = config("srushtikanhere@gmail.com")
-EMAIL_HOST_PASSWORD = config("mlqi mbys bkua irbe")
-DEFAULT_FROM_EMAIL = config("EMAIL_HOST_USER")
+EMAIL_HOST = os.getenv("EMAIL_HOST")
+EMAIL_PORT = os.getenv("EMAIL_PORT")
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS")
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
 
 
 AUTHENTICATION_BACKENDS = [
@@ -173,7 +176,5 @@ REST_FRAMEWORK = {
     ]
 }
 
-from decouple import config
-
-RAZORPAY_KEY_ID = config("rzp_live_dbdGN8afzHsBEq")
-RAZORPAY_KEY_SECRET = config("ZDe5WIylkkaeMSgYQFJpKgQT")
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
