@@ -1,60 +1,27 @@
-from django.urls import path
-from .views import CustomerViewSet, ComplaintViewSet, CustomerRegisterView
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import CustomerViewSet, MilkRequirementViewSet, LegacyCustomerViewSet
 
+# Set the lookup_field on each ViewSet
+CustomerViewSet.lookup_field = 'id'
+MilkRequirementViewSet.lookup_field = 'id'
+
+
+
+
+router = DefaultRouter()
+router.register(r'customers', CustomerViewSet, basename='customer')
+router.register(r'milkrequirements', MilkRequirementViewSet, basename='milkrequirement')
+
+# Bill and payment history endpoints are now available via CustomerViewSet actions:
+# /customers/<id>/bills/
+# /customers/<id>/bills/<bill_id>/
+# /customers/<id>/payment-history/
+
+legacy_router = DefaultRouter()
+legacy_router.register(r'legacy-customers', LegacyCustomerViewSet, basename='legacy-customers')
 
 urlpatterns = [
-    # Customer CRUD
-    path(
-        "allcustomers/", CustomerViewSet.as_view({"get": "list"}), name="customer-list"
-    ),
-    path(
-        "customerdetails/<int:pk>/",
-        CustomerViewSet.as_view({"get": "retrieve"}),
-        name="customer-retrieve",
-    ),
-    path(
-        "addcustomer/",
-        CustomerViewSet.as_view({"post": "create"}),
-        name="customer-create",
-    ),
-    path(
-        "updatecustomer/<int:pk>/",
-        CustomerViewSet.as_view({"put": "update"}),
-        name="customer-update",
-    ),
-    path(
-        "deletecustomer/<int:pk>/",
-        CustomerViewSet.as_view({"delete": "destroy"}),
-        name="customer-delete",
-    ),
-    # Complaint CRUD
-    path(
-        "allcomplaints/",
-        ComplaintViewSet.as_view({"get": "list"}),
-        name="complaint-list",
-    ),
-    path(
-        "complaintdetails/<int:pk>/",
-        ComplaintViewSet.as_view({"get": "retrieve"}),
-        name="complaint-retrieve",
-    ),
-    path(
-        "addcomplaint/",
-        ComplaintViewSet.as_view({"post": "create"}),
-        name="complaint-create",
-    ),
-    path(
-        "updatecomplaint/<int:pk>/",
-        ComplaintViewSet.as_view({"put": "update"}),
-        name="complaint-update",
-    ),
-    path(
-        "deletecomplaint/<int:pk>/",
-        CustomerViewSet.as_view({"delete": "destroy"}),
-        name="complaint-delete",
-    ),
-    # Customer Registration Login
-    path(
-        "customer-register/", CustomerRegisterView.as_view(), name="customer-register"
-    ),
+    path('', include(router.urls)),
+    path('', include(legacy_router.urls)),
 ]

@@ -11,8 +11,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 from pathlib import Path
-
-from dotenv import load_dotenv
+from datetime import timedelta
 import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -25,16 +24,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 
 
-load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY")
+
+SECRET_KEY = "django-insecure-=f5c1$3r(#ypf6hllwozc!!3um3ht#k^c1)ff@s%v71^u-a*="
 
 # SECURITY WARNING: don't run with debug turned on in production!
 
 
-DEBUG = os.getenv("DEBUG")
+DEBUG = True
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = ["milkywayapi.beatsacademy.in", "*", 'localhost:4200']
 
 
 # Application definition
@@ -47,10 +46,14 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "vendor_login",
+    "Dashboard",
+    # "Deliveryhistory",
+    "vendorcalendar",
     "vendor",
     "Milkman",
     "Customer",
-    "Subscription",
+    "Systemadmin",
+    "subscription",
     "BusinessRegistration",
     "Report",
     "rest_framework",
@@ -59,13 +62,18 @@ INSTALLED_APPS = [
     "corsheaders",
 ]
 CORS_ORIGIN_ALLOW_ALL = True
-CORS_ALLOWED_ORIGINS = ["http://localhost:4200"]  # React frontend URL
+
+# CORS_ALLOWED_ORIGINS = ["http://localhost:4200"]  # React frontend URL
+
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
+    "OneWindowHomeSolution.middleware.request_logging.RequestLoggingMiddleware",
+    "OneWindowHomeSolution.custom_middleware.FixAuthorizationHeaderMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -96,16 +104,16 @@ WSGI_APPLICATION = "OneWindowHomeSolution.wsgi.application"
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-DEBUG = os.getenv("DEBUG", default=False, cast=bool)
+# SECRET_KEY = os.getenv("SECRET_KEY")
+# DEBUG = os.getenv("DEBUG", default=False, cast=bool)
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.mysql",
-        "NAME": os.getenv("NAME"),  # Replace with your default database name
-        "USER": os.getenv("USER"),
-        "PASSWORD": os.getenv("PASSWORD"),
-        "HOST": os.getenv("HOST"),
-        "PORT": os.getenv("PORT"),
+        "NAME": "MilkMgmt",  # Replace with your default database name
+        "USER": "milkyway_api",
+        "PASSWORD": "milkyway_api",
+        "HOST": "localhost",
+        "PORT": "3306",
         "OPTIONS": {
             "charset": "utf8mb4",
         },
@@ -148,20 +156,22 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = "static/"
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = os.getenv("EMAIL_HOST")
-EMAIL_PORT = os.getenv("EMAIL_PORT")
-EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS")
-EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
-EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
+# EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+# EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+# EMAIL_HOST = os.getenv("EMAIL_HOST")
+# EMAIL_PORT = os.getenv("EMAIL_PORT")
+# EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS")
+# EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
+# EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
+# DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
 
 
 AUTHENTICATION_BACKENDS = [
@@ -169,12 +179,195 @@ AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",
 ]
 
+# Custom user model
+AUTH_USER_MODEL = 'Systemadmin.Systemadmin'
+
 REST_FRAMEWORK = {
-    "DEFAULT_RENDERER_CLASSES": [
-        "rest_framework.renderers.JSONRenderer",
-        "rest_framework.renderers.BrowsableAPIRenderer",  # this is required
-    ]
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'OneWindowHomeSolution.custom_authentication.CustomJWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+        # 'rest_framework.authentication.BasicAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
 }
 
-RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
-RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ROTATE_REFRESH_TOKENS': False,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+}
+
+# Razorpay Configuration
+
+# RAZORPAY_KEY_ID = "rzp_live_dbdGN8afzHsBEq"  # REDACTED FOR PUBLIC REPO
+# RAZORPAY_KEY_SECRET = "ZDe5WIylkkaeMSgYQFJpKgQT"  # REDACTED FOR PUBLIC REPO
+
+# TWILIO_ACCOUNT_SID = "REDACTED_FOR_PUBLIC_REPO"
+# TWILIO_AUTH_TOKEN = "REDACTED_FOR_PUBLIC_REPO"
+# TWILIO_PHONE_NUMBER = "REDACTED_FOR_PUBLIC_REPO"
+
+SWAGGER_SETTINGS = {
+    'SECURITY_DEFINITIONS': {
+        # 'Basic': {
+        #     'type': 'basic',
+        #     'description': 'Basic Authentication using username and password.',
+        # },
+        'Bearer': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header',
+            'description': 'JWT Authorization header using the Bearer scheme. Example: "Authorization: Bearer {token}"',
+        },
+    },
+    'USE_SESSION_AUTH': False,
+    'JSON_EDITOR': True,
+    'LOGIN_URL': '/systemadmin/adminlogin/',
+    'LOGOUT_URL': '/vendor-login/logout/',
+}
+
+# Logging Configuration
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{levelname}] {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+            'datefmt': '%Y-%m-%d %H:%M:%S',
+        },
+        'simple': {
+            'format': '[{levelname}] {asctime} {message}',
+            'style': '{',
+            'datefmt': '%Y-%m-%d %H:%M:%S',
+        },
+    },
+    'filters': {
+        'require_debug_false': {
+            '()': 'django.utils.log.RequireDebugFalse',
+        },
+        'require_debug_true': {
+            '()': 'django.utils.log.RequireDebugTrue',
+        },
+    },
+    'handlers': {
+        'console': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+        'file_all_actions': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', 'all_actions.log'),
+            'maxBytes': 10 * 1024 * 1024,  # 10 MB
+            'backupCount': 10,
+            'formatter': 'verbose',
+        },
+        'file_vendor': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', 'vendor_actions.log'),
+            'maxBytes': 10 * 1024 * 1024,  # 10 MB
+            'backupCount': 10,
+            'formatter': 'verbose',
+        },
+        'file_milkman': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', 'milkman_actions.log'),
+            'maxBytes': 10 * 1024 * 1024,  # 10 MB
+            'backupCount': 10,
+            'formatter': 'verbose',
+        },
+        'file_customer': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', 'customer_actions.log'),
+            'maxBytes': 10 * 1024 * 1024,  # 10 MB
+            'backupCount': 10,
+            'formatter': 'verbose',
+        },
+        'file_errors': {
+            'level': 'ERROR',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': os.path.join(BASE_DIR, 'logs', 'errors.log'),
+            'maxBytes': 10 * 1024 * 1024,  # 10 MB
+            'backupCount': 10,
+            'formatter': 'verbose',
+        },
+        'mail_admins': {
+            'level': 'ERROR',
+            'class': 'django.utils.log.AdminEmailHandler',
+            'filters': ['require_debug_false'],
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file_all_actions', 'file_errors'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['console', 'file_all_actions', 'file_errors', 'mail_admins'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+        'vendor': {
+            'handlers': ['console', 'file_all_actions', 'file_vendor'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'Milkman': {
+            'handlers': ['console', 'file_all_actions', 'file_milkman'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'Customer': {
+            'handlers': ['console', 'file_all_actions', 'file_customer'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'BusinessRegistration': {
+            'handlers': ['console', 'file_all_actions', 'file_vendor'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'subscription': {
+            'handlers': ['console', 'file_all_actions'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'Report': {
+            'handlers': ['console', 'file_all_actions'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'vendor_login': {
+            'handlers': ['console', 'file_all_actions', 'file_vendor'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'Systemadmin': {
+            'handlers': ['console', 'file_all_actions'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        # Catch-all logger for any app not specifically configured
+        '': {
+            'handlers': ['console', 'file_all_actions', 'file_errors'],
+            'level': 'INFO',
+        },
+    },
+}
+
+# Create logs directory if it doesn't exist
+LOGS_DIR = os.path.join(BASE_DIR, 'logs')
+if not os.path.exists(LOGS_DIR):
+    os.makedirs(LOGS_DIR)

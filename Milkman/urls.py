@@ -1,26 +1,20 @@
-from django.urls import path
-from .views import MilkmanViewSet
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import MilkmanViewSet, MilkmanActionsViewSet, LegacyMilkmanViewSet
 
+# Legacy router setup
+legacy_router = DefaultRouter()
+legacy_router.register(r'legacy-milkmen', LegacyMilkmanViewSet, basename='legacy-milkmen')
 
+# Main router setup
+router = DefaultRouter()
+router.register(r'milkmen', MilkmanViewSet, basename='milkman')
+router.register(r'actions', MilkmanActionsViewSet, basename='milkman-actions')
+
+# URL patterns
 urlpatterns = [
-    # Milkman CRUD
-    path("allmilkmans/", MilkmanViewSet.as_view({"get": "list"}), name="milkman-list"),
-    path(
-        "milkmandetails/<int:pk>/",
-        MilkmanViewSet.as_view({"get": "retrieve"}),
-        name="milkman-retrieve",
-    ),
-    path(
-        "addmilkman/", MilkmanViewSet.as_view({"post": "create"}), name="milkman-create"
-    ),
-    path(
-        "updatemilkman/<int:pk>/",
-        MilkmanViewSet.as_view({"put": "update"}),
-        name="milkman-update",
-    ),
-    path(
-        "deletemilkman/<int:pk>/",
-        MilkmanViewSet.as_view({"delete": "destroy"}),
-        name="milkman-delete",
-    ),
+    path('', include(router.urls)),
+    path('', include(legacy_router.urls)),
+    # Custom endpoint for checking vendor assignment
+    path('actions/check-vendor-assignment/<int:pk>/', MilkmanActionsViewSet.as_view({'get': 'check_vendor_assignment'}), name='milkman-check-vendor-assignment'),
 ]

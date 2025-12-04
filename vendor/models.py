@@ -1,94 +1,105 @@
 from django.db import models
+import random
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from BusinessRegistration.models import VendorBusinessRegistration
 
 
-# Create your models here.
-# Main Service Provider(Vendor) Model
-class Vendor(models.Model):
+# Request Model for Customers and Milkmen to join a Vendor
+class JoinRequest(models.Model):
     name = models.CharField(max_length=100, null=True, blank=True)
-    contact = models.CharField(max_length=15, null=True, blank=True)
-    email = models.EmailField(null=True, blank=True)
-    address = models.TextField(null=True, blank=True)
-    city = models.CharField(max_length=50, null=True, blank=True)
-    date_of_birth = models.CharField(max_length=100, null=True, blank=True)
-    company_name = models.CharField(max_length=100, null=True, blank=True)
+    
+    # Generic foreign key to support both Customer and Milkman
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, default=1)
+    object_id = models.PositiveIntegerField(default=0)
+    requester = GenericForeignKey('content_type', 'object_id')
+    
+    vendor = models.ForeignKey(VendorBusinessRegistration, on_delete=models.CASCADE)
 
-    def __str__(self):
-        return self.name
-
-
-# Society managed by Service Provider (Vendor)
-class Society(models.Model):
-    vendor = models.ForeignKey(
-        Vendor, on_delete=models.CASCADE, related_name="societies"
-    )
-    name = models.CharField(max_length=100, null=True, blank=True)
-    address = models.TextField(null=True, blank=True)
-    city = models.CharField(max_length=50, null=True, blank=True)
-    manager_name = models.CharField(max_length=100, null=True, blank=True)
-    manager_contact = models.CharField(max_length=15, null=True, blank=True)
-
-    def __str__(self):
-        return f"{self.name} - Vendor: {self.vendor.name}"
-
-
-# Flat & linked to Society
-class FlatDetail(models.Model):
-    vendor = models.ForeignKey(
-        Vendor, on_delete=models.CASCADE, related_name="flats"
-    )  # added vendor link
-    society = models.ForeignKey(Society, on_delete=models.CASCADE, related_name="flats")
-    owner_name = models.CharField(max_length=100, null=True, blank=True)
-    owner_contact = models.CharField(max_length=15, null=True, blank=True)
-    flat_number = models.CharField(max_length=20, null=True, blank=True)
-    parking_lot = models.CharField(max_length=50, null=True, blank=True)
-
-    def __str__(self):
-        return f"Flat {self.flat_number} - {self.society.name}"
-
-    # Choices for milk quantity
-    MILK_QUANTITY_CHOICES = [
-        ("half_litre", "Half Litre"),
-        ("one_litre", "One Litre"),
-        ("two_litre", "Two Litre"),
-    ]
-
-    # Choices for milk type
-    MILK_TYPE_CHOICES = [
-        ("cow", "Cow"),
-        ("buffalo", "Buffalo"),
-    ]
-
-    # Fields for quantity, milk type, and company name
-    milk_quantity = models.CharField(
+    user_type = models.CharField(
         max_length=10,
-        choices=MILK_QUANTITY_CHOICES,
-        default="one_litre",
+        choices=[("customer", "Customer"), ("milkman", "Milkman")],
+        null=True,
+        blank=True,
     )
 
-    milk_type = models.CharField(
+    status = models.CharField(
         max_length=10,
-        choices=MILK_TYPE_CHOICES,
-        default="cow",
+        choices=[
+            ("pending", "Pending"),
+            ("accepted", "Accepted"),
+            ("rejected", "Rejected"),
+            ("withdrawn", "Withdrawn"),
+            ("cancelled", "Cancelled"),
+            ("separated", "Separated"),
+        ],
+        default="pending",
     )
+    
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    rejected_at = models.DateTimeField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Join Request"
+        verbose_name_plural = "Join Requests"
+        indexes = [
+            models.Index(fields=['vendor', 'status']),
+            models.Index(fields=['content_type', 'object_id']),
+            models.Index(fields=['user_type', 'status']),
+            models.Index(fields=['rejected_at']),
+        ]
 
     def __str__(self):
-        return f"{self.flat_number} - {self.society.name} - {self.milk_quantity} of {self.milk_type} milk "
+        return f"{self.name} → {self.vendor.name} ({self.user_type})"
+
+    @property
+    def user_object(self):
+        """Return the actual user object (Customer or Milkman)"""
+        return self.requester
+
+    @property
+    def user_contact(self):
+        """Return the contact/phone number string of the requester."""
+        if self.user_type == "customer":
+            contact = getattr(self.requester, 'contact', None)
+            if contact:
+                return contact.phone_number  # Return the string, not the model
+            return None
+        elif self.user_type == "milkman":
+            phone = getattr(self.requester, 'phone_number', None)
+            if phone:
+                return phone.phone_number  # Return the string, not the model
+            return None
+        return None
+
+    @property
+    def milk_requirement(self):
+        """Fetch the milk requirement of the customer creating the join request."""
+        if self.user_type == "customer":
+            return {
+                "cow_milk_litre": getattr(self.requester, 'cow_milk_litre', None),
+                "buffalo_milk_litre": getattr(self.requester, 'buffalo_milk_litre', None)
+            }
+        return None
+
+    def is_customer_accepted(self):
+        """
+        Check if the customer has been accepted by the vendor.
+        Returns True if the status is 'accepted', otherwise False.
+        """
+        return self.status == "accepted"
 
 
-# Worker Payment linked to Service Provider (Vendor)
-class WorkerPayment(models.Model):
-    vendor = models.ForeignKey(
-        Vendor, on_delete=models.CASCADE, related_name="payments"
-    )
-    worker_name = models.CharField(max_length=100, null=True, blank=True)
-    contact = models.CharField(max_length=15, null=True, blank=True)
-    assigned_society = models.CharField(max_length=100, null=True, blank=True)
-    assigned_flat = models.CharField(max_length=100, null=True, blank=True)
-    amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    payment_date = models.DateField(auto_now_add=True, null=True, blank=True)
-    payment_mode = models.CharField(
-        max_length=50, null=True, blank=True
-    )  # e.g., Cash, UPI, NEFT
+# OTP Verification Model
+class OTPVerification(models.Model):
+    phone_number = models.CharField(max_length=15, default="9999999999")
+    otp = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True)
 
-    def __str__(self):
-        return f"{self.worker_name} - ₹{self.amount} - {self.vendor.name}"
+    def generate_otp(self):
+        self.otp = str(random.randint(100000, 999999))
+        self.save()

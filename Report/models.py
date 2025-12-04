@@ -10,11 +10,24 @@ class Customer(models.Model):
 
 
 class Invoice(models.Model):
-    # invoice_number = models.CharField(max_length=100, unique=True)
+    invoice_number = models.CharField(
+        max_length=100,
+        unique=True,
+        db_index=True
+    )
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE)
-    date = models.DateField(auto_now_add=True, null=True, blank=True)
+    date = models.DateField(
+        auto_now_add=True,
+        null=True,
+        blank=True,
+        db_index=True
+    )
     total_amount = models.DecimalField(
-        max_digits=10, decimal_places=2, null=True, blank=True
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        db_index=True
     )
     # def __str__(self):
     #     return f"Invoice #{self.id}"
