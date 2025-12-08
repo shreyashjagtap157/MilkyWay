@@ -1,7 +1,7 @@
 from datetime import date
 from calendar import monthrange
 import logging
-from django.db.models import Sum
+from django.db.models import Sum, Q
 
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework import viewsets
@@ -12,16 +12,17 @@ from rest_framework.permissions import IsAuthenticated, BasePermission
 
 from BusinessRegistration.models import VendorBusinessRegistration as Vendor
 from Customer.billing_utils import generate_or_update_bills_for_vendor
-from Customer.models import Customer, Bill
+from Customer.models import Customer, Bill, BillLineItem
 from Milkman.models import Milkman
 from vendor.models import JoinRequest
 from django.db.models import F, ExpressionWrapper, IntegerField, Func, Value
 
-from vendorcalendar.models import CustomerRequest, MilkmanLeaveRequest
+from vendorcalendar.models import CustomerRequest, MilkmanLeaveRequest, DeliveryRecord
 from OneWindowHomeSolution.responses import success_response, error_response
 from OneWindowHomeSolution.custom_authentication import CustomJWTAuthentication
 from .models import SubscriptionPlan
 from .serializers import SubscriptionPlanSerializer
+from decimal import Decimal
 
 
 @swagger_auto_schema(
@@ -73,20 +74,13 @@ def vendor_dashboard_summary(request):
     total_consumer = Customer.objects.filter(provider=vendor).count()
 
 
-    # Consumer extra milk amount: sum of cow and buffalo extra milk for this vendor, only for requests with type 'extra_milk', status pending/approved, and date today or future
-    extra_milk_qs = CustomerRequest.objects.filter(
+    # Consumer extra milk pending requests count: number of pending extra milk requests
+    # from customers that are already accepted/assigned to this vendor.
+    consumer_extra_milk_amount = CustomerRequest.objects.filter(
         vendor=vendor,
         request_type="extra_milk",
-        status="pending",
-        date__gte=today
-    )
-    consumer_extra_milk_amount = extra_milk_qs.aggregate(
-        total_cow=Sum('cow_milk_extra'),
-        total_buffalo=Sum('buffalo_milk_extra')
-    )
-    total_cow = consumer_extra_milk_amount.get('total_cow') or 0
-    total_buffalo = consumer_extra_milk_amount.get('total_buffalo') or 0
-    consumer_extra_milk_amount = float(total_cow) + float(total_buffalo)
+        status="pending"
+    ).count()
 
     # Pending join requests for this vendor
     pending_request_count = JoinRequest.objects.filter(
@@ -272,6 +266,119 @@ class SubscriptionPlanViewSet(viewsets.ViewSet):
             return success_response("Subscription plan deleted successfully", status_code=status.HTTP_204_NO_CONTENT)
         except Exception as e:
             return error_response(f"Failed to delete subscription plan: {str(e)}", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@swagger_auto_schema(
+    method="get",
+    operation_summary="Customer Monthly Summary",
+    operation_description="Returns monthly summary for a customer including total milk delivered (regular + extra), delivery counts, leaves, and unpaid amount for the month.",
+    manual_parameters=[
+        openapi.Parameter('customer_id', openapi.IN_QUERY, description="Customer ID", type=openapi.TYPE_INTEGER, required=True),
+        openapi.Parameter('month', openapi.IN_QUERY, description="Month (1-12)", type=openapi.TYPE_INTEGER, required=True),
+        openapi.Parameter('year', openapi.IN_QUERY, description="Year (e.g., 2025)", type=openapi.TYPE_INTEGER, required=True),
+    ],
+    responses={200: openapi.Response(description="Customer monthly summary")}
+)
+@api_view(["GET"])
+@authentication_classes([CustomJWTAuthentication])
+@permission_classes([IsAuthenticated])
+def customer_month_summary(request):
+    """Monthly summary for customer role."""
+    customer_id = request.query_params.get('customer_id')
+    month = request.query_params.get('month')
+    year = request.query_params.get('year')
+
+    if not (customer_id and month and year):
+        return error_response("customer_id, month, and year are required", status_code=400)
+
+    try:
+        month = int(month)
+        year = int(year)
+    except ValueError:
+        return error_response("month and year must be integers", status_code=400)
+
+    try:
+        customer = Customer.objects.get(id=customer_id)
+    except Customer.DoesNotExist:
+        return error_response("Customer not found", status_code=404)
+
+    start_date = date(year, month, 1)
+    end_date = date(year, month, monthrange(year, month)[1])
+
+    cow_base = Decimal(str(customer.cow_milk_litre or 0))
+    buffalo_base = Decimal(str(customer.buffalo_milk_litre or 0))
+
+    # Delivered records within month
+    delivered_regular = DeliveryRecord.objects.filter(
+        customer=customer,
+        date__gte=start_date,
+        date__lte=end_date,
+        delivery_type='regular',
+        status='delivered'
+    )
+    delivered_extra = DeliveryRecord.objects.filter(
+        customer=customer,
+        date__gte=start_date,
+        date__lte=end_date,
+        delivery_type='extra',
+        status='delivered'
+    )
+
+    regular_dates = set(delivered_regular.values_list('date', flat=True))
+    extra_dates = set(delivered_extra.values_list('date', flat=True))
+
+    # Delivery count rule:
+    # - Regular delivery counts as 1 for the date
+    # - Extra delivery counts as +1 only if there was no regular delivery on that date
+    regular_delivery_count = len(regular_dates)
+    extra_delivery_count = len([d for d in extra_dates if d not in regular_dates])
+    total_deliveries = regular_delivery_count + extra_delivery_count
+
+    # Milk delivered: base quantities for regular delivered days + extras from both regular (inline) and extra deliveries
+    base_cow = cow_base * Decimal(str(regular_delivery_count))
+    base_buffalo = buffalo_base * Decimal(str(regular_delivery_count))
+
+    inline_extra_cow = delivered_regular.aggregate(total=Sum('cow_milk_extra'))['total'] or 0
+    inline_extra_buffalo = delivered_regular.aggregate(total=Sum('buffalo_milk_extra'))['total'] or 0
+    extra_cow = delivered_extra.aggregate(total=Sum('cow_milk_extra'))['total'] or 0
+    extra_buffalo = delivered_extra.aggregate(total=Sum('buffalo_milk_extra'))['total'] or 0
+
+    total_cow_delivered = base_cow + Decimal(str(inline_extra_cow)) + Decimal(str(extra_cow))
+    total_buffalo_delivered = base_buffalo + Decimal(str(inline_extra_buffalo)) + Decimal(str(extra_buffalo))
+    total_milk_delivered = total_cow_delivered + total_buffalo_delivered
+
+    # Leaves: approved leaves (legacy) or quantity_adjustment with zero quantities
+    leaves_count = CustomerRequest.objects.filter(
+        customer=customer,
+        date__gte=start_date,
+        date__lte=end_date,
+        status='approved'
+    ).filter(
+        Q(request_type='leave') |
+        Q(request_type='quantity_adjustment', cow_milk_extra=0, buffalo_milk_extra=0)
+    ).count()
+
+    # Unpaid amount for deliveries in this month: pending bills, line items within month
+    unpaid_amount = BillLineItem.objects.filter(
+        bill__customer=customer,
+        bill__status='pending',
+        date__gte=start_date,
+        date__lte=end_date
+    ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+    data = {
+        'customer_id': customer.id,
+        'month': month,
+        'year': year,
+        'total_milk_delivered_litres': float(total_milk_delivered),
+        'total_deliveries': total_deliveries,
+        'leaves_count': leaves_count,
+        'unpaid_amount': float(unpaid_amount),
+        'cow_milk_delivered_litres': float(total_cow_delivered),
+        'buffalo_milk_delivered_litres': float(total_buffalo_delivered),
+    }
+
+    return success_response("Customer monthly summary fetched successfully", data)
 
 
 @api_view(["GET"])

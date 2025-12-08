@@ -6,6 +6,7 @@ from .views import (
     sync_accepted_join_requests_api,
     NotificationAnalyticsView,
     vendor_dashboard_summary,
+    customer_month_summary,
 )
 
 router = DefaultRouter()
@@ -16,5 +17,6 @@ urlpatterns = [
     path('sync-accepted-join-requests/', sync_accepted_join_requests_api, name='sync-accepted-join-requests'),
     path('analytics/notifications/', NotificationAnalyticsView.as_view(), name='notification-analytics'),
     path('vendor-dashboard-summary/', vendor_dashboard_summary, name='vendor-dashboard-summary'),
+    path('customer-month-summary/', customer_month_summary, name='customer-month-summary'),
     path('', include(router.urls)),
 ]

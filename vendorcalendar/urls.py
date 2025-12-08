@@ -1,12 +1,13 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
-    VendorCalendarViewSet, DistributorCalendarViewSet,
+    VendorCalendarViewSet, DistributorCalendarViewSet, DeliveryAdjustmentViewSet,
 )
 
 router = DefaultRouter()
 router.register(r'vendor-calendar', VendorCalendarViewSet, basename='vendor-calendar')
 router.register(r'distributor-calendar', DistributorCalendarViewSet, basename='distributor-calendar')
+router.register(r'delivery-adjustment', DeliveryAdjustmentViewSet, basename='delivery-adjustment')
 
 urlpatterns = [
     path('', include(router.urls)),

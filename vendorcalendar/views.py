@@ -10,7 +10,7 @@ from django.utils import timezone
 from datetime import datetime, date
 
 from .models import DeliveryRecord, MilkmanLeaveRequest, CustomerRequest
-from .serializers import DeliveryCalendarSerializer, LeaveRequestSerializer, MilkmanLeaveRequestSerializer, DeliveryRecordSerializer, CustomerRequestSerializer
+from .serializers import DeliveryCalendarSerializer, LeaveRequestSerializer, MilkmanLeaveRequestSerializer, DeliveryRecordSerializer, CustomerRequestSerializer, DeliveryAdjustmentSerializer
 from Customer.models import Customer
 from Milkman.models import Milkman
 from BusinessRegistration.models import VendorBusinessRegistration
@@ -80,8 +80,8 @@ class VendorCalendarViewSet(viewsets.ViewSet):
         return success_response("Milkman assigned successfully.", CustomerRequestSerializer(customer_request).data)
 
     @swagger_auto_schema(
-        operation_summary="List Pending Extra Milk Requests Assigned to Milkman (From Date Onwards)",
-        operation_description="List all pending extra milk requests assigned to a milkman from the given date onwards.",
+        operation_summary="List Approved Extra Milk Requests Assigned to Milkman (From Date Onwards)",
+        operation_description="List all approved extra milk requests assigned to a milkman from the given date onwards. Only shows requests that have been approved by the vendor.",
         manual_parameters=[
             openapi.Parameter(
                 'milkman_id', openapi.IN_QUERY, description="Milkman ID", type=openapi.TYPE_INTEGER, required=True
@@ -91,7 +91,7 @@ class VendorCalendarViewSet(viewsets.ViewSet):
             ),
         ],
         responses={
-            200: openapi.Response("Pending extra milk requests assigned to milkman from date onwards.", CustomerRequestSerializer(many=True)),
+            200: openapi.Response("Approved extra milk requests assigned to milkman from date onwards.", CustomerRequestSerializer(many=True)),
             400: "Invalid input or request",
             404: "Milkman not found"
         }
@@ -99,14 +99,15 @@ class VendorCalendarViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'], url_path='milkman-extra-milk-requests')
     def milkman_extra_milk_requests(self, request):
         """
-        List all pending extra milk requests assigned to a milkman from the given date onwards.
+        List all approved extra milk requests assigned to a milkman from the given date onwards.
+        Only returns requests that have been approved by the vendor.
         
         Query Parameters:
             - milkman_id (int, required): Milkman ID
             - date (str, required): Start date in YYYY-MM-DD format
         
         Returns:
-            List of extra milk requests assigned to the specified milkman with pending status, from the given date onwards.
+            List of extra milk requests assigned to the specified milkman with approved status, from the given date onwards.
         """
         milkman_id = request.query_params.get('milkman_id')
         date_str = request.query_params.get('date')
@@ -121,11 +122,13 @@ class VendorCalendarViewSet(viewsets.ViewSet):
             date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
         except ValueError:
             return error_response("Invalid date format. Use YYYY-MM-DD.")
+        # Only show approved requests to the milkman
         requests = CustomerRequest.objects.filter(
             request_type='extra_milk',
             extra_milk_delivery_milkman=milkman,
             date__gte=date_obj,
-            extra_milk_delivery_status='pending'
+            status='approved',  # Only approved requests
+            extra_milk_delivery_status='pending'  # Still pending delivery
         )
         serialized = CustomerRequestSerializer(requests, many=True).data
         # Add customer name and address to each object
@@ -147,7 +150,74 @@ class VendorCalendarViewSet(viewsets.ViewSet):
                     getattr(customer, 'pincode', None),
                 ]
                 serialized[idx]['customer_address'] = ', '.join([str(part) for part in address_parts if part])
-        return success_response("Pending extra milk requests assigned to milkman from date onwards.", serialized)
+        return success_response("Approved extra milk requests assigned to milkman from date onwards.", serialized)
+
+    @swagger_auto_schema(
+        operation_summary="List All Extra Milk Requests Assigned to Milkman (From Date Onwards)",
+        operation_description="List all extra milk requests (pending, approved, rejected) assigned to a milkman from the given date onwards. For vendor/management view.",
+        manual_parameters=[
+            openapi.Parameter(
+                'milkman_id', openapi.IN_QUERY, description="Milkman ID", type=openapi.TYPE_INTEGER, required=True
+            ),
+            openapi.Parameter(
+                'date', openapi.IN_QUERY, description="Start date (YYYY-MM-DD). Returns all requests from this date onwards.", type=openapi.TYPE_STRING, required=True
+            ),
+        ],
+        responses={
+            200: openapi.Response("All extra milk requests assigned to milkman from date onwards.", CustomerRequestSerializer(many=True)),
+            400: "Invalid input or request",
+            404: "Milkman not found"
+        }
+    )
+    @action(detail=False, methods=['get'], url_path='milkman-all-extra-milk-requests')
+    def milkman_all_extra_milk_requests(self, request):
+        """
+        List all extra milk requests (pending, approved, rejected) assigned to a milkman from the given date onwards.
+        This endpoint is for vendor/management purposes to see all request statuses.
+        
+        Query Parameters:
+            - milkman_id (int, required): Milkman ID
+            - date (str, required): Start date in YYYY-MM-DD format
+        
+        Returns:
+            List of all extra milk requests assigned to the specified milkman from the given date onwards.
+        """
+        milkman_id = request.query_params.get('milkman_id')
+        date_str = request.query_params.get('date')
+        if not milkman_id or not date_str:
+            return error_response("milkman_id and date are required.")
+        try:
+            from Milkman.models import Milkman
+            milkman = Milkman.objects.get(id=milkman_id)
+        except Exception:
+            return error_response("Milkman not found.")
+        try:
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return error_response("Invalid date format. Use YYYY-MM-DD.")
+        # Return all requests regardless of approval status
+        requests = CustomerRequest.objects.filter(
+            request_type='extra_milk',
+            extra_milk_delivery_milkman=milkman,
+            date__gte=date_obj,
+        )
+        serialized = CustomerRequestSerializer(requests, many=True).data
+        # Add customer name and address to each object
+        for idx, req in enumerate(requests):
+            customer = req.customer
+            serialized[idx]['customer_name'] = str(customer.name) if customer and customer.name else ""
+            # Fallback: concatenate address fields
+            address_parts = [
+                getattr(customer, 'flat_no', None),
+                getattr(customer, 'society_name', None),
+                getattr(customer, 'village', None),
+                getattr(customer, 'tal', None),
+                getattr(customer, 'dist', None),
+                getattr(customer, 'state', None),
+                getattr(customer, 'pincode', None),
+            ]
+            serialized[idx]['customer_address'] = ', '.join([str(part) for part in address_parts if part])
+        return success_response("All extra milk requests assigned to milkman from date onwards.", serialized)
 
     @swagger_auto_schema(
         operation_summary="Mark Extra Milk Delivery Status",
@@ -448,13 +518,16 @@ class VendorCalendarViewSet(viewsets.ViewSet):
                     "status": "extra_milk",
                 })
 
-        # Add pending customer requests (leave/extra milk)
+
+        # Add pending customer requests (only extra milk since leaves are auto-approved)
         for req in pending_requests:
-            status_prefix = "pending_leave" if req.request_type == "leave" else "pending_extra_milk"
-            calendar_data.append({
-                "date": req.date.strftime("%Y-%m-%d"),
-                "status": status_prefix,
-            })
+            if req.request_type != "leave":  # Skip pending leaves as they're auto-approved
+                status_prefix = "pending_extra_milk"
+                calendar_data.append({
+                    "date": req.date.strftime("%Y-%m-%d"),
+                    "status": status_prefix,
+                })
+
 
         logger.info("END CustomerCalendarViewSet.list | calendar fetched for customer_id: %s", customer_id)
         return success_response("Calendar fetched successfully", calendar_data)
@@ -548,7 +621,7 @@ class VendorCalendarViewSet(viewsets.ViewSet):
 
     @swagger_auto_schema(
         operation_summary="Apply for Leave",
-        operation_description="Customer requests leave for a specific day.",
+        operation_description="Customer requests leave for a specific day. Leave is automatically approved without vendor intervention.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             required=["customer_id", "date"],
@@ -560,7 +633,7 @@ class VendorCalendarViewSet(viewsets.ViewSet):
             example={"customer_id": 1, "date": "2025-08-08"}
         ),
         responses={200: openapi.Response(
-            "Leave recorded",
+            "Leave recorded and approved",
             openapi.Schema(
                 type=openapi.TYPE_OBJECT,
                 properties={
@@ -596,16 +669,16 @@ class VendorCalendarViewSet(viewsets.ViewSet):
             return error_response("Customer must be associated with a vendor to request leave.", status_code=status.HTTP_400_BAD_REQUEST)
 
         # Create CustomerRequest instead of DeliveryRecord
+        # Auto-approve leave requests (customer decides their own leaves)
         request_obj, created = CustomerRequest.objects.get_or_create(
             customer=customer,
             date=date_obj,
             request_type="leave",
-            defaults={"vendor": customer.provider, "status": "pending"}
+            defaults={"vendor": customer.provider, "status": "approved"}
         )
         if not created:
-            # Update existing request if it was rejected or cancelled
-            request_obj.status = "pending"
-
+            # Update existing request - auto-approve it
+            request_obj.status = "approved"
             request_obj.vendor = customer.provider
             request_obj.save()
 
@@ -613,10 +686,10 @@ class VendorCalendarViewSet(viewsets.ViewSet):
         response_data = {
             "id": getattr(request_obj, 'id', None),
             "date": request_obj.date.strftime("%Y-%m-%d"),
-            "status": "pending_leave",  # Frontend expects this
+            "status": "leave",  # Changed from "pending_leave" to "leave" since it's approved
         }
-        logger.info("END apply_for_leave | leave request submitted for customer_id: %s, date: %s", customer_id, date_str)
-        return success_response("Leave request submitted for approval", response_data)
+        logger.info("END apply_for_leave | leave request approved for customer_id: %s, date: %s", customer_id, date_str)
+        return success_response("Leave request recorded successfully", response_data)
 
     @swagger_auto_schema(
         operation_summary="Vendor/Milkman Unavailability",
@@ -1455,17 +1528,16 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
         return success_response("List of pending milkman leave requests.", data)
 
     @swagger_auto_schema(
-        operation_summary="List Customer Requests (Leave & Extra Milk) for Vendor",
-        operation_description="List pending leave and extra milk requests from customers that need vendor approval. Response contains two lists: leave_requests and extra_milk_requests.",
+        operation_summary="List Customer Extra Milk Requests for Vendor",
+        operation_description="List pending extra milk requests from customers that need vendor approval. Leave requests are automatically approved and not shown here.",
         manual_parameters=[
             openapi.Parameter('vendor_id', openapi.IN_QUERY, description="Vendor ID", type=openapi.TYPE_INTEGER, required=True)
         ],
         responses={200: openapi.Response(
-            "Pending customer leave and extra milk requests",
+            "Pending customer extra milk requests",
             openapi.Schema(
                 type=openapi.TYPE_OBJECT,
                 properties={
-                    'leave_requests': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_OBJECT)),
                     'extra_milk_requests': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_OBJECT)),
                 }
             )
@@ -1482,14 +1554,7 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
             return error_response("Vendor not found.", status_code=status.HTTP_404_NOT_FOUND)
 
         today = date.today()
-        # Query CustomerRequest model instead of DeliveryRecord
-        leave_requests = CustomerRequest.objects.filter(
-            vendor=vendor,
-            request_type='leave',
-            status='pending',
-            date__gte=today
-        ).select_related('customer').order_by('date')
-        
+        # Leave requests are auto-approved, so we only fetch extra milk requests
         extra_milk_requests = CustomerRequest.objects.filter(
             vendor=vendor,
             request_type='extra_milk',
@@ -1497,19 +1562,7 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
             date__gte=today
         ).select_related('customer').order_by('date')
 
-        # Serialize with customer details
-        leave_data = []
-        for req in leave_requests:
-            leave_data.append({
-                "id": req.id,
-                "customer": CustomerSerializer(req.customer).data,
-                "date": req.date,
-                "request_type": req.request_type,
-
-                "status": req.status,
-                "created_at": req.created_at,
-            })
-        
+        # Serialize extra milk requests with customer details
         extra_milk_data = []
         for req in extra_milk_requests:
             extra_milk_data.append({
@@ -1519,16 +1572,14 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
                 "request_type": req.request_type,
                 "cow_milk_extra": req.cow_milk_extra,
                 "buffalo_milk_extra": req.buffalo_milk_extra,
-
                 "status": req.status,
                 "created_at": req.created_at,
             })
 
         response = {
-            "leave_requests": leave_data,
-            "extra_milk_requests": extra_milk_data
+            'extra_milk_requests': extra_milk_data,
         }
-        return success_response("Customer leave and extra milk requests.", response)
+        return success_response("Customer extra milk requests fetched successfully.", response)
 
     @swagger_auto_schema(
         operation_summary="Accept/Reject Milkman Leave Request",
@@ -1610,8 +1661,8 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
         )
 
     @swagger_auto_schema(
-        operation_summary="Accept/Reject Customer Request (Leave or Extra Milk)",
-        operation_description="Vendor can approve or reject a customer's leave or extra milk request with optional rejection reason. On approval, creates a DeliveryRecord.",
+        operation_summary="Accept/Reject Customer Extra Milk Request",
+        operation_description="Vendor can approve or reject a customer's extra milk request with optional rejection reason. Leave requests are automatically approved and cannot be managed through this endpoint.",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
@@ -1643,12 +1694,21 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
         except CustomerRequest.DoesNotExist:
             return error_response("Customer request not found.", status_code=status.HTTP_404_NOT_FOUND)
 
+        # Leave requests are auto-approved and cannot be managed by vendor
+        if customer_request.request_type == 'leave':
+            return error_response(
+                "Leave requests are automatically approved by the system and cannot be managed manually. "
+                "Customers have full control over their leave requests.",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+
         # Only allow approval/rejection for pending requests
         if customer_request.status != 'pending':
             return error_response(f"This request is already {customer_request.status}.", status_code=status.HTTP_400_BAD_REQUEST)
 
         customer = customer_request.customer
         milkman = getattr(customer, 'milkman', None)
+
 
         # Update status based on action and send notifications
         if action == 'approve':
@@ -1770,3 +1830,580 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
             f"Customer request {action}d successfully.", 
             CustomerRequestSerializer(customer_request).data
         )
+
+
+def get_delivery_quantity_for_date(customer, delivery_date):
+    """
+    Get the appropriate milk quantity for a customer on a specific date.
+    Checks for approved delivery adjustments first, falls back to regular quantities.
+    
+    Returns:
+        dict: {
+            'cow_milk': Decimal,
+            'buffalo_milk': Decimal,
+            'is_adjusted': bool,
+            'adjustment_type': str,  # 'leave', 'extra', 'reduced', or 'regular'
+            'adjustment_id': int or None,
+            'reason': str or None
+        }
+    """
+    # Check for approved quantity adjustment
+    adjustment = CustomerRequest.objects.filter(
+        customer=customer,
+        date=delivery_date,
+        request_type="quantity_adjustment",
+        status="approved"
+    ).first()
+    
+    if adjustment:
+        adjustment_type = None
+        if adjustment.is_leave:
+            adjustment_type = 'leave'
+        elif adjustment.is_extra_milk:
+            adjustment_type = 'extra'
+        elif adjustment.is_reduced_quantity:
+            adjustment_type = 'reduced'
+        else:
+            adjustment_type = 'adjusted'
+        
+        return {
+            'cow_milk': adjustment.requested_cow_milk or 0,
+            'buffalo_milk': adjustment.requested_buffalo_milk or 0,
+            'is_adjusted': True,
+            'adjustment_type': adjustment_type,
+            'adjustment_id': adjustment.id,
+            'reason': adjustment.reason
+        }
+    
+    # Check for approved leave request (old style)
+    leave_request = CustomerRequest.objects.filter(
+        customer=customer,
+        date=delivery_date,
+        request_type="leave",
+        status="approved"
+    ).first()
+    
+    if leave_request:
+        return {
+            'cow_milk': 0,
+            'buffalo_milk': 0,
+            'is_adjusted': True,
+            'adjustment_type': 'leave',
+            'adjustment_id': leave_request.id,
+            'reason': leave_request.reason
+        }
+    
+    # Return regular quantities
+    return {
+        'cow_milk': customer.cow_milk_litre or 0,
+        'buffalo_milk': customer.buffalo_milk_litre or 0,
+        'is_adjusted': False,
+        'adjustment_type': 'regular',
+        'adjustment_id': None,
+        'reason': None
+    }
+
+
+class DeliveryAdjustmentViewSet(viewsets.ViewSet):
+    """
+    ViewSet for unified delivery adjustment requests.
+    Handles all delivery quantity changes: leave (0), reduced, extra, or any custom quantity.
+    """
+    
+    @swagger_auto_schema(
+        operation_summary="Create Delivery Adjustment Request",
+        operation_description=(
+            "Unified endpoint for all delivery adjustments:\n"
+            "- Leave/Skip: Set both quantities to 0\n"
+            "- Extra Milk: Set quantities higher than regular\n"
+            "- Reduced Quantity: Set quantities lower than regular\n"
+            "\n"
+            "Examples:\n"
+            "- Regular: 5L cow milk → Skip delivery: requested_cow_milk=0\n"
+            "- Regular: 5L cow milk → Need 2L only: requested_cow_milk=2\n"
+            "- Regular: 5L cow milk → Need 7L: requested_cow_milk=7\n"
+        ),
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['customer_id', 'date'],
+            properties={
+                'customer_id': openapi.Schema(
+                    type=openapi.TYPE_INTEGER, 
+                    description='Customer ID'
+                ),
+                'date': openapi.Schema(
+                    type=openapi.TYPE_STRING, 
+                    format='date', 
+                    description='Date for adjustment (YYYY-MM-DD)'
+                ),
+                'requested_cow_milk': openapi.Schema(
+                    type=openapi.TYPE_NUMBER, 
+                    description='Requested cow milk quantity in liters (0 for skip)'
+                ),
+                'requested_buffalo_milk': openapi.Schema(
+                    type=openapi.TYPE_NUMBER, 
+                    description='Requested buffalo milk quantity in liters (0 for skip)'
+                ),
+                'reason': openapi.Schema(
+                    type=openapi.TYPE_STRING, 
+                    description='Reason for adjustment'
+                ),
+                'delivery_time': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    format='time',
+                    description='Preferred delivery time (HH:MM) - optional'
+                ),
+            }
+        ),
+        responses={
+            201: openapi.Response(description="Delivery adjustment request created", schema=DeliveryAdjustmentSerializer),
+            400: openapi.Response(description="Bad request"),
+            404: openapi.Response(description="Customer not found")
+        }
+    )
+    def create(self, request):
+        """Create a unified delivery adjustment request"""
+        try:
+            customer_id = request.data.get('customer_id')
+            date_str = request.data.get('date')
+            requested_cow = request.data.get('requested_cow_milk')
+            requested_buffalo = request.data.get('requested_buffalo_milk')
+            reason = request.data.get('reason', '')
+            delivery_time_str = request.data.get('delivery_time')
+            
+            # Validations
+            if not customer_id or not date_str:
+                return error_response("customer_id and date are required.", status_code=400)
+            
+            if requested_cow is None and requested_buffalo is None:
+                return error_response("At least one milk type quantity must be specified.", status_code=400)
+            
+            # Get customer
+            try:
+                customer = Customer.objects.get(id=customer_id)
+            except Customer.DoesNotExist:
+                return not_found_response(f"Customer with ID {customer_id} not found.")
+            
+            # Parse date
+            try:
+                adjustment_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return error_response("Invalid date format. Use YYYY-MM-DD.", status_code=400)
+            
+            # Validate date (allow today for same-day adjustments)
+            if adjustment_date < timezone.now().date():
+                return error_response("Cannot create adjustment for past dates.", status_code=400)
+            
+            # Parse delivery time if provided
+            delivery_time = None
+            if delivery_time_str:
+                try:
+                    delivery_time = datetime.strptime(delivery_time_str, '%H:%M').time()
+                except ValueError:
+                    return error_response("Invalid time format. Use HH:MM (24-hour).", status_code=400)
+            
+            # Convert to Decimal
+            try:
+                if requested_cow is not None:
+                    requested_cow = Decimal(str(requested_cow))
+                if requested_buffalo is not None:
+                    requested_buffalo = Decimal(str(requested_buffalo))
+            except (InvalidOperation, ValueError):
+                return error_response("Invalid quantity values.", status_code=400)
+            
+            # Validate quantities
+            if requested_cow is not None and requested_cow < 0:
+                return error_response("Cow milk quantity cannot be negative.", status_code=400)
+            
+            if requested_buffalo is not None and requested_buffalo < 0:
+                return error_response("Buffalo milk quantity cannot be negative.", status_code=400)
+            
+            # Check for existing request (for quantity_adjustment type)
+            existing_request = CustomerRequest.objects.filter(
+                customer=customer,
+                date=adjustment_date,
+                request_type="quantity_adjustment",
+                status__in=["pending", "approved"]
+            ).first()
+            
+            if existing_request:
+                return error_response(
+                    f"A delivery adjustment already exists for {adjustment_date}.",
+                    status_code=400,
+                    extra_data={
+                        "existing_request_id": existing_request.id,
+                        "status": existing_request.status,
+                        "current_cow_milk": str(existing_request.requested_cow_milk) if existing_request.requested_cow_milk else None,
+                        "current_buffalo_milk": str(existing_request.requested_buffalo_milk) if existing_request.requested_buffalo_milk else None,
+                    }
+                )
+            
+            # Also check for existing leave/extra_milk requests for same date
+            existing_other = CustomerRequest.objects.filter(
+                customer=customer,
+                date=adjustment_date,
+                request_type__in=["leave", "extra_milk"],
+                status__in=["pending", "approved"]
+            ).first()
+            
+            if existing_other:
+                return error_response(
+                    f"A {existing_other.get_request_type_display()} request already exists for {adjustment_date}. Please cancel it first or use that request.",
+                    status_code=400,
+                    extra_data={
+                        "existing_request_id": existing_other.id,
+                        "request_type": existing_other.request_type,
+                        "status": existing_other.status,
+                    }
+                )
+            
+            # Create request
+            adjustment_request = CustomerRequest.objects.create(
+                customer=customer,
+                vendor=customer.provider,
+                request_type="quantity_adjustment",
+                date=adjustment_date,
+                requested_cow_milk=requested_cow,
+                requested_buffalo_milk=requested_buffalo,
+                reason=reason,
+                extra_milk_delivery_time=delivery_time,
+                extra_milk_delivery_milkman=customer.milkman,  # Default to regular milkman
+                status="pending"
+            )
+            
+            # Determine adjustment type for response
+            adjustment_type = adjustment_request.get_adjustment_type()
+            
+            # Get regular quantities for comparison
+            regular_cow = customer.cow_milk_litre or 0
+            regular_buffalo = customer.buffalo_milk_litre or 0
+            
+            # Send FCM notification to vendor
+            if customer.provider and hasattr(customer.provider, 'fcm_token') and customer.provider.fcm_token:
+                customer_name = getattr(customer, 'name', None) or f"Customer #{customer.id}"
+                send_fcm_notification(
+                    customer.provider.fcm_token,
+                    "New Delivery Adjustment Request",
+                    f"{customer_name} has requested a delivery adjustment ({adjustment_type}) for {adjustment_date}."
+                )
+            
+            response_data = {
+                "request_id": adjustment_request.id,
+                "adjustment_type": adjustment_type,
+                "customer_id": customer.id,
+                "customer_name": getattr(customer, 'name', None) or str(customer),
+                "date": adjustment_date.isoformat(),
+                "regular_quantities": {
+                    "cow_milk": str(regular_cow),
+                    "buffalo_milk": str(regular_buffalo)
+                },
+                "requested_quantities": {
+                    "cow_milk": str(requested_cow) if requested_cow is not None else None,
+                    "buffalo_milk": str(requested_buffalo) if requested_buffalo is not None else None
+                },
+                "status": "pending",
+                "requires_vendor_approval": True,
+                "created_at": adjustment_request.created_at.isoformat() if adjustment_request.created_at else None
+            }
+            
+            # Add helpful context based on adjustment type
+            if adjustment_request.is_leave:
+                response_data["note"] = "This is a leave/skip delivery request"
+            elif adjustment_request.is_extra_milk:
+                response_data["note"] = "This is an extra milk request"
+            elif adjustment_request.is_reduced_quantity:
+                response_data["note"] = "This is a reduced quantity request"
+            
+            return success_response("Delivery adjustment request created successfully.", response_data, status_code=201)
+            
+        except Exception as e:
+            logger.error(f"Error in create_delivery_adjustment_request: {str(e)}")
+            return error_response(f"An error occurred: {str(e)}", status_code=500)
+
+    @swagger_auto_schema(
+        operation_summary="List Delivery Adjustment Requests",
+        operation_description="Get all delivery adjustment requests with optional filters",
+        manual_parameters=[
+            openapi.Parameter(
+                'vendor_id', 
+                openapi.IN_QUERY, 
+                description="Filter by vendor ID", 
+                type=openapi.TYPE_INTEGER
+            ),
+            openapi.Parameter(
+                'customer_id', 
+                openapi.IN_QUERY, 
+                description="Filter by customer ID", 
+                type=openapi.TYPE_INTEGER
+            ),
+            openapi.Parameter(
+                'status', 
+                openapi.IN_QUERY, 
+                description="Filter by status: pending, approved, rejected", 
+                type=openapi.TYPE_STRING
+            ),
+            openapi.Parameter(
+                'adjustment_type', 
+                openapi.IN_QUERY, 
+                description="Filter by type: leave, extra, reduced", 
+                type=openapi.TYPE_STRING
+            ),
+            openapi.Parameter(
+                'date_from', 
+                openapi.IN_QUERY, 
+                description="Filter from date (YYYY-MM-DD)", 
+                type=openapi.TYPE_STRING,
+                format='date'
+            ),
+            openapi.Parameter(
+                'date_to', 
+                openapi.IN_QUERY, 
+                description="Filter to date (YYYY-MM-DD)", 
+                type=openapi.TYPE_STRING,
+                format='date'
+            ),
+        ],
+        responses={200: DeliveryAdjustmentSerializer(many=True)}
+    )
+    def list(self, request):
+        """List delivery adjustment requests with filters"""
+        try:
+            vendor_id = request.query_params.get('vendor_id')
+            customer_id = request.query_params.get('customer_id')
+            status_filter = request.query_params.get('status')
+            adjustment_type = request.query_params.get('adjustment_type')
+            date_from = request.query_params.get('date_from')
+            date_to = request.query_params.get('date_to')
+            
+            # Start with quantity_adjustment requests
+            queryset = CustomerRequest.objects.filter(
+                request_type="quantity_adjustment"
+            ).select_related(
+                'customer', 'vendor', 'extra_milk_delivery_milkman'
+            )
+            
+            # Apply filters
+            if vendor_id:
+                queryset = queryset.filter(vendor_id=vendor_id)
+            
+            if customer_id:
+                queryset = queryset.filter(customer_id=customer_id)
+            
+            if status_filter:
+                queryset = queryset.filter(status=status_filter)
+            
+            if date_from:
+                queryset = queryset.filter(date__gte=date_from)
+            
+            if date_to:
+                queryset = queryset.filter(date__lte=date_to)
+            
+            # Filter by adjustment type (computed property) - post-filter
+            if adjustment_type:
+                filtered_ids = []
+                for req in queryset:
+                    if adjustment_type == 'leave' and req.is_leave:
+                        filtered_ids.append(req.id)
+                    elif adjustment_type == 'extra' and req.is_extra_milk:
+                        filtered_ids.append(req.id)
+                    elif adjustment_type == 'reduced' and req.is_reduced_quantity:
+                        filtered_ids.append(req.id)
+                queryset = queryset.filter(id__in=filtered_ids)
+            
+            serializer = DeliveryAdjustmentSerializer(queryset, many=True)
+            
+            return success_response(
+                "Delivery adjustments fetched successfully.",
+                serializer.data,
+                extra_data={"count": len(serializer.data)}
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in list_delivery_adjustments: {str(e)}")
+            return error_response(f"An error occurred: {str(e)}", status_code=500)
+
+    @swagger_auto_schema(
+        operation_summary="Approve/Reject Delivery Adjustment Request",
+        operation_description="Vendor approves or rejects a delivery adjustment request",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['request_id', 'action'],
+            properties={
+                'request_id': openapi.Schema(type=openapi.TYPE_INTEGER, description="Adjustment request ID"),
+                'action': openapi.Schema(type=openapi.TYPE_STRING, enum=['approve', 'reject'], description="Action to take"),
+                'rejection_reason': openapi.Schema(type=openapi.TYPE_STRING, description='Required if action is reject'),
+            }
+        ),
+        responses={
+            200: openapi.Response(description="Request processed successfully", schema=DeliveryAdjustmentSerializer),
+            400: openapi.Response(description="Bad request"),
+            404: openapi.Response(description="Request not found")
+        }
+    )
+    @action(detail=False, methods=['post'], url_path='approve-reject')
+    def approve_reject(self, request):
+        """Approve or reject a delivery adjustment request"""
+        try:
+            request_id = request.data.get('request_id')
+            action = request.data.get('action')  # 'approve' or 'reject'
+            rejection_reason = request.data.get('rejection_reason', '')
+            
+            if not request_id or action not in ['approve', 'reject']:
+                return error_response("request_id and valid action (approve/reject) are required.", status_code=400)
+            
+            try:
+                customer_request = CustomerRequest.objects.get(
+                    id=request_id, 
+                    request_type="quantity_adjustment"
+                )
+            except CustomerRequest.DoesNotExist:
+                return not_found_response(f"Delivery adjustment request with ID {request_id} not found.")
+            
+            if customer_request.status != 'pending':
+                return error_response(f"Request is already {customer_request.status}.", status_code=400)
+            
+            customer = customer_request.customer
+            adjustment_type = customer_request.get_adjustment_type()
+            
+            # Update request status
+            if action == 'approve':
+                customer_request.status = 'approved'
+                customer_request.approved_rejected_at = timezone.now()
+                
+                # Send FCM notification to customer
+                if hasattr(customer, 'fcm_token') and customer.fcm_token:
+                    send_fcm_notification(
+                        customer.fcm_token,
+                        "Delivery Adjustment Approved",
+                        f"Your {adjustment_type.lower()} request for {customer_request.date} has been approved."
+                    )
+                
+                # If it's a leave (0 quantity), notify milkman
+                if customer_request.is_leave:
+                    milkman = customer.milkman
+                    if milkman and hasattr(milkman, 'fcm_token') and milkman.fcm_token:
+                        customer_name = getattr(customer, 'name', None) or f"Customer #{customer.id}"
+                        send_fcm_notification(
+                            milkman.fcm_token,
+                            "Customer Skip Delivery",
+                            f"{customer_name} has no delivery scheduled for {customer_request.date}."
+                        )
+                # If it's extra milk, notify milkman about extra delivery
+                elif customer_request.is_extra_milk:
+                    milkman = customer_request.extra_milk_delivery_milkman or customer.milkman
+                    if milkman and hasattr(milkman, 'fcm_token') and milkman.fcm_token:
+                        customer_name = getattr(customer, 'name', None) or f"Customer #{customer.id}"
+                        cow = customer_request.requested_cow_milk or 0
+                        buffalo = customer_request.requested_buffalo_milk or 0
+                        send_fcm_notification(
+                            milkman.fcm_token,
+                            "Extra Delivery Request",
+                            f"{customer_name} needs {cow}L cow + {buffalo}L buffalo milk on {customer_request.date}."
+                        )
+                # Notify milkman about reduced quantity
+                elif customer_request.is_reduced_quantity:
+                    milkman = customer.milkman
+                    if milkman and hasattr(milkman, 'fcm_token') and milkman.fcm_token:
+                        customer_name = getattr(customer, 'name', None) or f"Customer #{customer.id}"
+                        cow = customer_request.requested_cow_milk or 0
+                        buffalo = customer_request.requested_buffalo_milk or 0
+                        send_fcm_notification(
+                            milkman.fcm_token,
+                            "Reduced Delivery",
+                            f"{customer_name} needs only {cow}L cow + {buffalo}L buffalo milk on {customer_request.date}."
+                        )
+                
+            else:  # reject
+                if not rejection_reason:
+                    return error_response("rejection_reason is required when rejecting a request.", status_code=400)
+                customer_request.status = 'rejected'
+                customer_request.rejection_reason = rejection_reason
+                customer_request.approved_rejected_at = timezone.now()
+                
+                # Send FCM notification to customer
+                if hasattr(customer, 'fcm_token') and customer.fcm_token:
+                    send_fcm_notification(
+                        customer.fcm_token,
+                        "Delivery Adjustment Rejected",
+                        f"Your {adjustment_type.lower()} request for {customer_request.date} was rejected. Reason: {rejection_reason}"
+                    )
+            
+            customer_request.save()
+            
+            return success_response(
+                f"Delivery adjustment request {action}d successfully.",
+                DeliveryAdjustmentSerializer(customer_request).data
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in approve_reject_delivery_adjustment: {str(e)}")
+            return error_response(f"An error occurred: {str(e)}", status_code=500)
+
+    @swagger_auto_schema(
+        operation_summary="Get Delivery Quantity for Date",
+        operation_description="Get the appropriate milk quantity for a customer on a specific date, considering any approved adjustments.",
+        manual_parameters=[
+            openapi.Parameter(
+                'customer_id', 
+                openapi.IN_QUERY, 
+                description="Customer ID", 
+                type=openapi.TYPE_INTEGER,
+                required=True
+            ),
+            openapi.Parameter(
+                'date', 
+                openapi.IN_QUERY, 
+                description="Date (YYYY-MM-DD)", 
+                type=openapi.TYPE_STRING,
+                format='date',
+                required=True
+            ),
+        ],
+        responses={
+            200: openapi.Response(description="Delivery quantity information"),
+            400: openapi.Response(description="Bad request"),
+            404: openapi.Response(description="Customer not found")
+        }
+    )
+    @action(detail=False, methods=['get'], url_path='quantity-for-date')
+    def quantity_for_date(self, request):
+        """Get the delivery quantity for a customer on a specific date"""
+        try:
+            customer_id = request.query_params.get('customer_id')
+            date_str = request.query_params.get('date')
+            
+            if not customer_id or not date_str:
+                return error_response("customer_id and date are required.", status_code=400)
+            
+            try:
+                customer = Customer.objects.get(id=customer_id)
+            except Customer.DoesNotExist:
+                return not_found_response(f"Customer with ID {customer_id} not found.")
+            
+            try:
+                delivery_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return error_response("Invalid date format. Use YYYY-MM-DD.", status_code=400)
+            
+            quantity_info = get_delivery_quantity_for_date(customer, delivery_date)
+            
+            return success_response(
+                "Delivery quantity fetched successfully.",
+                {
+                    "customer_id": customer.id,
+                    "customer_name": getattr(customer, 'name', None) or str(customer),
+                    "date": date_str,
+                    "cow_milk": str(quantity_info['cow_milk']),
+                    "buffalo_milk": str(quantity_info['buffalo_milk']),
+                    "is_adjusted": quantity_info['is_adjusted'],
+                    "adjustment_type": quantity_info['adjustment_type'],
+                    "adjustment_id": quantity_info['adjustment_id'],
+                    "reason": quantity_info['reason'],
+                    "regular_cow_milk": str(customer.cow_milk_litre or 0),
+                    "regular_buffalo_milk": str(customer.buffalo_milk_litre or 0),
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in quantity_for_date: {str(e)}")
+            return error_response(f"An error occurred: {str(e)}", status_code=500)
