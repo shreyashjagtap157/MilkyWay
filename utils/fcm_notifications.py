@@ -1,66 +1,10 @@
-# import firebase_admin
-# from firebase_admin import messaging, credentials
-
-# # Initialize Firebase Admin SDK
-# cred = credentials.Certificate("milkyway-5e3e9-firebase-adminsdk-fbsvc-d764a5129f.json")
-# firebase_admin.initialize_app(cred)
-
-# def send_notification(fcm_token, title, body, data=None):
-#     """
-#     Send a notification to a specific FCM token.
-
-#     :param fcm_token: The FCM token of the recipient.
-#     :param title: The title of the notification.
-#     :param body: The body of the notification.
-#     :param data: Optional data payload.
-#     :return: Response from Firebase.
-#     """
-#     try:
-#         message = messaging.Message(
-#             notification=messaging.Notification(
-#                 title=title,
-#                 body=body
-#             ),
-#             token=fcm_token,
-#             data=data or {}
-#         )
-#         response = messaging.send(message)
-#         return response
-#     except Exception as e:
-#         return str(e)
-
-# def send_bulk_notifications(fcm_tokens, title, body, data=None):
-#     """
-#     Send notifications to multiple FCM tokens.
-
-#     :param fcm_tokens: List of FCM tokens.
-#     :param title: The title of the notification.
-#     :param body: The body of the notification.
-#     :param data: Optional data payload.
-#     :return: Response from Firebase.
-#     """
-#     try:
-#         message = messaging.MulticastMessage(
-#             notification=messaging.Notification(
-#                 title=title,
-#                 body=body
-#             ),
-#             tokens=fcm_tokens,
-#             data=data or {}
-#         )
-#         response = messaging.send_multicast(message)
-#         return response
-#     except Exception as e:
-#         return str(e)
-
-
-
 import firebase_admin
 from firebase_admin import messaging, credentials
 
 # Initialize Firebase Admin SDK
 cred = credentials.Certificate("milkyway-5e3e9-firebase-adminsdk-fbsvc-d764a5129f.json")
 firebase_admin.initialize_app(cred)
+
 
 def send_fcm_notification(token, title, body, data=None):
      message = messaging.Message(

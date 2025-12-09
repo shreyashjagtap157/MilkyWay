@@ -149,26 +149,3 @@ def invoice_excel_view(request, pk):
         return not_found_response("Invoice not found")
     except Exception as e:
         return error_response(f"An error occurred: {str(e)}", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-# @api_view(["GET"])
-# def invoice_pdf_view(request, pk):
-#     # Simulated PDF content (replace with actual logic)
-#     content = b"%PDF-1.4\n%PDF-content-here"
-#     response = HttpResponse(content, content_type="application/pdf")
-#     response["Content-Disposition"] = f'attachment; filename="invoice_{pk}.pdf"'
-#     return response
-
-
-# 2 Working
-# def invoice_pdf_view(request, pk):
-#     # Dummy PDF generation logic (replace with your actual logic)
-#     content = b"%PDF-1.4\n%Dummy PDF content\n"
-#     response = HttpResponse(content, content_type="application/pdf")
-#     response["Content-Disposition"] = f'attachment; filename="invoice_{pk}.pdf"'
-#     return response
-
-# 1 Working
-# def invoice_pdf_view(request, invoice_id):
-#     invoice = get_object_or_404(Invoice, id=invoice_id)
-#     return generate_invoice_pdf(invoice)

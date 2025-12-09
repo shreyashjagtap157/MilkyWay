@@ -59,12 +59,6 @@ class LoginSerializer(serializers.Serializer):
                                      help_text="FCM token for push notifications")
 
 
-# # Vendor (Service Provider) Login Serializer
-# class VendorLoginSerializer(serializers.Serializer):
-#     contact = serializers.CharField()
-#     password = serializers.CharField()
-
-
 # Admin Login Serializer
 class AdminLoginSerializer(serializers.Serializer):
     username = serializers.CharField(max_length=150)

@@ -387,22 +387,11 @@ def dashboard_data(request):
         total_vendors = Vendor.objects.count()
         total_customers = Customer.objects.count()
         total_milkmen = Milkman.objects.count()
-        # Subscription functionality temporarily disabled
-        # total_active_subscribers = SubscribedVendor.objects.count()
-        # total_monthly_subscriptions = SubscribedVendor.objects.filter(plan__duration=30).count()
-        # total_six_month_subscriptions = SubscribedVendor.objects.filter(plan__duration=180).count()
-        # total_yearly_subscriptions = SubscribedVendor.objects.filter(plan__duration=365).count()
 
         data = {
             "total_vendors": total_vendors,
             "total_customers": total_customers,
             "total_milkmen": total_milkmen,
-            # "subscribers": {
-            #     "total": total_active_subscribers,
-            #     "monthly": total_monthly_subscriptions,
-            #     "six_month": total_six_month_subscriptions,
-            #     "yearly": total_yearly_subscriptions,
-            # },
         }
         return success_response("Dashboard data fetched successfully", data)
     except Exception as e:

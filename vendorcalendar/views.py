@@ -504,7 +504,6 @@ class VendorCalendarViewSet(viewsets.ViewSet):
                 "status": record.status,
             })
 
-
         # Add approved customer leave requests only (not milkman leaves)
         for req in approved_requests:
             if req.request_type == "leave":
@@ -513,21 +512,36 @@ class VendorCalendarViewSet(viewsets.ViewSet):
                     "status": "leave",
                 })
             elif req.request_type == "extra_milk":
-                calendar_data.append({
-                    "date": req.date.strftime("%Y-%m-%d"),
-                    "status": "extra_milk",
-                })
-
+                # Check the delivery status of the extra milk
+                delivery_status = getattr(req, 'extra_milk_delivery_status', 'pending')
+                
+                if delivery_status == 'delivered':
+                    # Extra milk has been delivered by milkman
+                    calendar_data.append({
+                        "date": req.date.strftime("%Y-%m-%d"),
+                        "status": "delivered_extra_milk",
+                    })
+                elif delivery_status == 'unsuccessful':
+                    # Extra milk delivery was unsuccessful
+                    calendar_data.append({
+                        "date": req.date.strftime("%Y-%m-%d"),
+                        "status": "unsuccessful_extra_milk",
+                    })
+                else:
+                    # Extra milk is approved but not yet delivered (pending delivery)
+                    calendar_data.append({
+                        "date": req.date.strftime("%Y-%m-%d"),
+                        "status": "extra_milk",
+                    })
 
         # Add pending customer requests (only extra milk since leaves are auto-approved)
         for req in pending_requests:
             if req.request_type != "leave":  # Skip pending leaves as they're auto-approved
-                status_prefix = "pending_extra_milk"
+                # Pending means vendor hasn't approved yet
                 calendar_data.append({
                     "date": req.date.strftime("%Y-%m-%d"),
-                    "status": status_prefix,
+                    "status": "pending_extra_milk",
                 })
-
 
         logger.info("END CustomerCalendarViewSet.list | calendar fetched for customer_id: %s", customer_id)
         return success_response("Calendar fetched successfully", calendar_data)
@@ -605,15 +619,6 @@ class VendorCalendarViewSet(viewsets.ViewSet):
             record.milkman = milkman
             record.vendor = customer.provider
             record.save()
-
-    # Update or create DeliveryHistory - temporarily disabled
-    # dh, dh_created = DeliveryHistory.objects.get_or_create(
-    #     customer=customer, delivery_date=date_obj,
-    # )
-    # if not dh_created:
-    #     dh.status = status_val
-    #     dh.milkman = milkman
-    #     dh.save()
 
         serializer = DeliveryCalendarSerializer(record)
         logger.info("END CustomerCalendarViewSet.create | delivery status updated for customer_id: %s, date: %s", customer_id, date_str)
@@ -961,7 +966,15 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
 
     @swagger_auto_schema(
         operation_summary="Mark Delivery Status",
-        operation_description="Mark delivery status as either delivered or cancelled.",
+        operation_description=(
+            "Mark delivery status as either delivered or cancelled.\n\n"
+            "Supports custom quantities:\n"
+            "- cow_milk: Total cow milk quantity delivered (liters)\n"
+            "- buffalo_milk: Total buffalo milk quantity delivered (liters)\n"
+            "- reason: Reason for custom quantities (e.g., 'Customer requested less today')\n\n"
+            "If quantities are provided, they represent the total amount delivered.\n"
+            "If not provided, regular daily quantities from customer profile will be assumed."
+        ),
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
@@ -973,7 +986,10 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
                     enum=["delivered", "cancelled"],
                     description="Delivery status", 
                     default="delivered"
-                )
+                ),
+                'cow_milk': openapi.Schema(type=openapi.TYPE_NUMBER, description="Total cow milk quantity delivered (liters)"),
+                'buffalo_milk': openapi.Schema(type=openapi.TYPE_NUMBER, description="Total buffalo milk quantity delivered (liters)"),
+                'reason': openapi.Schema(type=openapi.TYPE_STRING, description="Reason for custom quantities"),
             },
             required=['customer_id', 'date', 'milkman_id']
         ),
@@ -1020,25 +1036,43 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
                 "milkman": milkman,
             }
 
-            # Accept optional extras when marking delivery (milkman may include extras at delivery time)
-            cow_milk_extra = request.data.get('cow_milk_extra')
-            buffalo_milk_extra = request.data.get('buffalo_milk_extra')
-            try:
-                if cow_milk_extra is not None and cow_milk_extra != "":
-                    defaults['cow_milk_extra'] = Decimal(str(cow_milk_extra))
-                if buffalo_milk_extra is not None and buffalo_milk_extra != "":
-                    defaults['buffalo_milk_extra'] = Decimal(str(buffalo_milk_extra))
-            except (InvalidOperation, ValueError, TypeError):
-                return error_response("cow_milk_extra and buffalo_milk_extra must be numbers.", status_code=status.HTTP_400_BAD_REQUEST)
+            # Get custom quantities (total milk delivered)
+            cow_milk = request.data.get('cow_milk')
+            buffalo_milk = request.data.get('buffalo_milk')
+            reason = request.data.get('reason')
+            
+            # Check if custom quantities are provided
+            has_custom_quantities = (cow_milk is not None and cow_milk != "") or \
+                                   (buffalo_milk is not None and buffalo_milk != "")
+            
+            # Parse and validate quantities
+            if has_custom_quantities:
+                try:
+                    cow_qty = Decimal(str(cow_milk)) if cow_milk not in [None, ""] else Decimal('0')
+                    buffalo_qty = Decimal(str(buffalo_milk)) if buffalo_milk not in [None, ""] else Decimal('0')
+                    
+                    if cow_qty < 0 or buffalo_qty < 0:
+                        return error_response("Milk quantities cannot be negative.", status_code=status.HTTP_400_BAD_REQUEST)
+                    
+                    # Store quantities in cow_milk_extra and buffalo_milk_extra fields
+                    # These represent the total delivered quantities
+                    defaults['cow_milk_extra'] = cow_qty
+                    defaults['buffalo_milk_extra'] = buffalo_qty
+                    
+                    # Log reason if provided
+                    if reason:
+                        logger.info(f"Custom delivery for customer {customer_id} on {date}: cow={cow_qty}L, buffalo={buffalo_qty}L, reason={reason}")
+                    
+                except (InvalidOperation, ValueError, TypeError):
+                    return error_response("cow_milk and buffalo_milk must be valid numbers.", status_code=status.HTTP_400_BAD_REQUEST)
 
             # Add vendor if customer has a provider
             if customer.provider:
                 defaults["vendor"] = customer.provider
 
-            delivery_type = "extra" if (
-                ('cow_milk_extra' in defaults and defaults['cow_milk_extra'] and defaults['cow_milk_extra'] != 0) or
-                ('buffalo_milk_extra' in defaults and defaults['buffalo_milk_extra'] and defaults['buffalo_milk_extra'] != 0)
-            ) else "regular"
+            # Always use "regular" delivery type since we're not distinguishing between regular and extra
+            delivery_type = "regular"
+            
             delivery_record, created = DeliveryRecord.objects.update_or_create(
                 customer=customer,
                 date=date,
@@ -1046,9 +1080,37 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
                 defaults=defaults
             )
 
+            # Update associated CustomerRequest status if this was an approved extra milk request
+            # This ensures the calendar and other views know the extra milk was actually delivered
+            try:
+                extra_request = CustomerRequest.objects.filter(
+                    customer=customer,
+                    date=date,
+                    request_type='extra_milk',
+                    status='approved'
+                ).first()
+
+                if extra_request:
+                    if delivery_status == 'delivered':
+                        extra_request.extra_milk_delivery_status = 'delivered'
+                    else:
+                        # Map 'cancelled' or other statuses to 'unsuccessful' for the request
+                        extra_request.extra_milk_delivery_status = 'unsuccessful'
+                    
+                    extra_request.extra_milk_delivery_marked_at = timezone.now()
+                    extra_request.save()
+                    logger.info("Updated extra milk request %s delivery status to %s", extra_request.id, extra_request.extra_milk_delivery_status)
+            except Exception as e:
+                # Log error but don't fail the delivery record creation
+                logger.error("Failed to update extra milk request status: %s", str(e))
+
+
             # Update response message based on status
             if delivery_status == "delivered":
-                message = "Delivery marked as successful."
+                if has_custom_quantities:
+                    message = f"Delivery marked as successful with quantities: {cow_qty}L cow, {buffalo_qty}L buffalo."
+                else:
+                    message = "Delivery marked as successful."
             else:  # cancelled
                 message = "Delivery marked as cancelled."
 
@@ -1716,33 +1778,13 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
             customer_request.approved_rejected_at = timezone.now()
             customer_request.rejection_reason = None  # Clear any previous rejection reason
             
-            # Create DeliveryRecord based on request type
-            delivery_status = 'leave' if customer_request.request_type == 'leave' else 'delivered'
-            delivery_remarks = ''
-            # For extra milk, add info to remarks
-            if customer_request.request_type == 'extra_milk':
-                extras = []
-                if customer_request.cow_milk_extra:
-                    extras.append(f"{customer_request.cow_milk_extra}L cow milk")
-                if customer_request.buffalo_milk_extra:
-                    extras.append(f"{customer_request.buffalo_milk_extra}L buffalo milk")
-                delivery_remarks = f"Extra {' and '.join(extras)} approved."
+            # DO NOT create DeliveryRecord here for extra milk
+            # DeliveryRecords should only be created when the milkman marks delivery as delivered
+            # For extra milk, the CustomerRequest.extra_milk_delivery_status tracks the actual delivery
+            # Billing will only include DeliveryRecords with status='delivered'
             
-            # Create or update DeliveryRecord with correct delivery_type
-            if customer_request.request_type == 'extra_milk':
-                DeliveryRecord.objects.update_or_create(
-                    customer=customer_request.customer,
-                    date=customer_request.date,
-                    delivery_type="extra",
-                    defaults={
-                        'vendor': customer_request.vendor,
-                        'milkman': milkman,
-                        'status': delivery_status,
-                        'cow_milk_extra': getattr(customer_request, 'cow_milk_extra', 0) or 0,
-                        'buffalo_milk_extra': getattr(customer_request, 'buffalo_milk_extra', 0) or 0,
-                    }
-                )
-            else:
+            # Only create DeliveryRecord for leave requests (not extra milk)
+            if customer_request.request_type == 'leave':
                 DeliveryRecord.objects.update_or_create(
                     customer=customer_request.customer,
                     date=customer_request.date,
@@ -1750,7 +1792,7 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
                     defaults={
                         'vendor': customer_request.vendor,
                         'milkman': milkman,
-                        'status': delivery_status,
+                        'status': 'leave',
                         'cow_milk_extra': 0,
                         'buffalo_milk_extra': 0,
                     }

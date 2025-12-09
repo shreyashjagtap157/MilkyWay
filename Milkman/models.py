@@ -3,7 +3,7 @@ from OneWindowHomeSolution.validators import validate_unique_contact
 from Systemadmin.models import UniquePhoneNumber
 
 
-# Create your models here.
+
 class Milkman(models.Model):
     fcm_token = models.CharField(max_length=255, null=True, blank=True, help_text="FCM token for push notifications.")
     full_name = models.CharField(max_length=100, null=True, blank=True)

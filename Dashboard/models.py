@@ -2,7 +2,6 @@ from django.db import models
 from Customer.models import Customer
 
 
-# Create your models here.
 # Model for Subscription Plans
 class SubscriptionPlan(models.Model):
     PLAN_CHOICES = [
@@ -23,5 +22,3 @@ class SubscriptionPlan(models.Model):
             models.Index(fields=["duration"]),
             models.Index(fields=["price"]),
         ]
-
-# class SubscribedUser(models.Model):
