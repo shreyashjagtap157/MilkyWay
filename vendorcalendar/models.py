@@ -32,6 +32,14 @@ class DeliveryRecord(models.Model):
 
     bill = models.ForeignKey('Customer.Bill', null=True, blank=True, on_delete=models.SET_NULL, related_name='delivery_records')
     bill_paid = models.BooleanField(default=False, help_text="True if this delivery has been paid for in a bill.")
+    
+    # Cancellation reason (only used when status is 'cancelled')
+    cancellation_reason = models.CharField(
+        max_length=255, 
+        null=True, 
+        blank=True, 
+        help_text="Reason for cancellation (e.g., product issue, address issue, customer unavailable)"
+    )
 
     class Meta:
         unique_together = ("customer", "date", "delivery_type")

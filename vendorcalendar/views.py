@@ -492,10 +492,14 @@ class VendorCalendarViewSet(viewsets.ViewSet):
         # Extra milk delivery status is shown via CustomerRequest logic below
         for record in delivery_records:
             if record.delivery_type == 'regular':
-                calendar_data.append({
+                entry = {
                     "date": record.date.strftime("%Y-%m-%d"),
                     "status": record.status,
-                })
+                }
+                # Include cancellation reason if delivery was cancelled
+                if record.status == 'cancelled' and record.cancellation_reason:
+                    entry["cancellation_reason"] = record.cancellation_reason
+                calendar_data.append(entry)
 
         # Add approved customer leave requests only (not milkman leaves)
         for req in approved_requests:
@@ -992,6 +996,7 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
                 'cow_milk': openapi.Schema(type=openapi.TYPE_NUMBER, description="Total cow milk quantity delivered (liters)"),
                 'buffalo_milk': openapi.Schema(type=openapi.TYPE_NUMBER, description="Total buffalo milk quantity delivered (liters)"),
                 'reason': openapi.Schema(type=openapi.TYPE_STRING, description="Reason for custom quantities"),
+                'cancellation_reason': openapi.Schema(type=openapi.TYPE_STRING, description="Reason for cancellation (required when status is cancelled)"),
             },
             required=['customer_id', 'date', 'milkman_id']
         ),
@@ -1029,8 +1034,8 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
             except Milkman.DoesNotExist:
                 return error_response("Milkman not found.", status_code=status.HTTP_404_NOT_FOUND)
 
-            # Map frontend status to model status (now direct mapping)
-            model_status = delivery_status  # Direct mapping: "delivered" → "delivered", "cancelled" → "cancelled"
+            # Map frontend status to model status (direct mapping)
+            model_status = delivery_status
 
             # Prepare defaults for delivery record
             defaults = {
@@ -1042,6 +1047,11 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
             cow_milk = request.data.get('cow_milk')
             buffalo_milk = request.data.get('buffalo_milk')
             reason = request.data.get('reason')
+            cancellation_reason = request.data.get('cancellation_reason')
+            
+            # Store cancellation reason if status is cancelled
+            if delivery_status == 'cancelled' and cancellation_reason:
+                defaults['cancellation_reason'] = cancellation_reason
             
             # Check if custom quantities are provided
             has_custom_quantities = (cow_milk is not None and cow_milk != "") or \
@@ -1095,7 +1105,10 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
                 else:
                     message = "Delivery marked as successful."
             else:  # cancelled
-                message = "Delivery marked as cancelled."
+                if cancellation_reason:
+                    message = f"Delivery marked as cancelled. Reason: {cancellation_reason}"
+                else:
+                    message = "Delivery marked as cancelled."
 
             return success_response(message, DeliveryRecordSerializer(delivery_record).data)
         except Customer.DoesNotExist:
@@ -1197,6 +1210,168 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.error("An error occurred in list_customers: %s", str(e), exc_info=True)
             return error_response(f"An error occurred: {str(e)}", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @swagger_auto_schema(
+        operation_summary="Get Milkman Delivery Calendar",
+        operation_description="Get delivery calendar for a milkman showing status for each day in a given month.",
+        manual_parameters=[
+            openapi.Parameter('milkman_id', openapi.IN_QUERY, description="Milkman ID (optional for milkman users)", type=openapi.TYPE_INTEGER, required=False),
+            openapi.Parameter('month', openapi.IN_QUERY, description="Month in YYYY-MM format", type=openapi.TYPE_STRING, required=True)
+        ],
+        responses={200: openapi.Response(description="Milkman calendar data")}
+    )
+    @action(detail=False, methods=['get'], url_path='milkman-calendar')
+    def milkman_calendar(self, request):
+        """
+        Returns delivery calendar for milkman with statuses: leave, delivered, pending, cancelled.
+        For each date, shows how many customers were delivered to, pending, or cancelled.
+        """
+        from calendar import monthrange
+        from datetime import timedelta
+        
+        milkman_id = request.query_params.get('milkman_id')
+        month_param = request.query_params.get('month')
+        
+        if not month_param:
+            return error_response("month is required.")
+        
+        try:
+            year, month = map(int, month_param.split("-"))
+        except ValueError:
+            return error_response("Invalid month format. Use YYYY-MM.")
+        
+        try:
+            if milkman_id:
+                milkman = Milkman.objects.get(id=milkman_id)
+            else:
+                milkman = Milkman.objects.get(id=request.user.id)
+        except Milkman.DoesNotExist:
+            return error_response("Milkman not found.", status_code=status.HTTP_404_NOT_FOUND)
+        
+        # Get date range for the month
+        _, days_in_month = monthrange(year, month)
+        start_date = date(year, month, 1)
+        end_date = date(year, month, days_in_month)
+        
+        # Get all customers assigned to this milkman
+        assigned_customers = Customer.objects.filter(milkman=milkman)
+        total_customers = assigned_customers.count()
+        customer_ids = list(assigned_customers.values_list('id', flat=True))
+        
+        if total_customers == 0:
+            return success_response("No customers assigned to this milkman.", [])
+        
+        # Get approved leave requests for this milkman in the month
+        leave_dates = set(
+            MilkmanLeaveRequest.objects.filter(
+                milkman=milkman,
+                start_date__gte=start_date,
+                start_date__lte=end_date,
+                status='approved'
+            ).values_list('start_date', flat=True)
+        )
+        
+        # Get all delivery records for assigned customers in the month
+        delivery_records = DeliveryRecord.objects.filter(
+            customer_id__in=customer_ids,
+            date__gte=start_date,
+            date__lte=end_date,
+            delivery_type='regular'
+        ).select_related('customer')
+        
+        # Build a dict: {date: {customer_id: status}}
+        delivery_by_date = {}
+        for record in delivery_records:
+            if record.date not in delivery_by_date:
+                delivery_by_date[record.date] = {}
+            delivery_by_date[record.date][record.customer_id] = {
+                'status': record.status,
+                'name': record.customer.name or f"Customer-{record.customer_id}"
+            }
+        
+        # Build customer name lookup
+        customer_names = {c.id: c.name or f"Customer-{c.id}" for c in assigned_customers}
+        
+        # Build calendar data for each day
+        calendar_data = []
+        current_date = start_date
+        today = date.today()
+        
+        while current_date <= end_date:
+            date_str = current_date.strftime("%Y-%m-%d")
+            
+            # If milkman is on leave, show leave status and skip other records
+            if current_date in leave_dates:
+                calendar_data.append({
+                    "date": date_str,
+                    "status": "leave"
+                })
+            else:
+                # Get delivery info for this date
+                date_deliveries = delivery_by_date.get(current_date, {})
+                
+                delivered_count = 0
+                cancelled_count = 0
+                cancelled_names = []
+                pending_count = 0
+                pending_names = []
+                
+                for customer_id in customer_ids:
+                    if customer_id in date_deliveries:
+                        status = date_deliveries[customer_id]['status']
+                        name = date_deliveries[customer_id]['name']
+                        if status == 'delivered':
+                            delivered_count += 1
+                        elif status == 'cancelled':
+                            cancelled_count += 1
+                            cancelled_names.append(name)
+                        else:
+                            # not_delivered, missed, etc. treated as pending
+                            pending_count += 1
+                            pending_names.append(name)
+                    else:
+                        # No delivery record = pending (for today and past dates only)
+                        if current_date <= today:
+                            pending_count += 1
+                            pending_names.append(customer_names.get(customer_id, f"Customer-{customer_id}"))
+                
+                # Add delivered entry if any deliveries made
+                if delivered_count > 0:
+                    calendar_data.append({
+                        "date": date_str,
+                        "status": "delivered",
+                        "customers": delivered_count
+                    })
+                
+                # Add cancelled entry if any cancellations
+                if cancelled_count > 0:
+                    calendar_data.append({
+                        "date": date_str,
+                        "status": "cancelled",
+                        "customers": cancelled_count,
+                        "name": ", ".join(cancelled_names)
+                    })
+                
+                # Add pending entry if any pending (for today and past dates)
+                if pending_count > 0 and current_date <= today:
+                    calendar_data.append({
+                        "date": date_str,
+                        "status": "pending",
+                        "customers": pending_count,
+                        "name": ", ".join(pending_names)
+                    })
+                
+                # For future dates with no activity, show all as pending
+                if current_date > today and delivered_count == 0 and cancelled_count == 0:
+                    calendar_data.append({
+                        "date": date_str,
+                        "status": "pending",
+                        "customers": total_customers
+                    })
+            
+            current_date += timedelta(days=1)
+        
+        return success_response("Milkman calendar fetched successfully.", calendar_data)
 
     @swagger_auto_schema(
         operation_summary="Get approved extra milk for today for a customer",
@@ -1391,17 +1566,21 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
                 # Map authenticated user to Milkman by id
                 milkman = Milkman.objects.get(id=request.user.id)
 
-            # Filter leave requests for the specified month - only show approved requests
+            # Filter leave requests for the specified month - show approved and pending requests
             leave_requests = MilkmanLeaveRequest.objects.filter(
                 milkman=milkman,
                 start_date__year=year,
                 start_date__month=month,
-                status='approved'  # Only show approved leave requests
+                status__in=['approved', 'pending']  # Include both approved and pending
             ).order_by('start_date')
 
-            # Prepare simplified response data
+            # Prepare simplified response data with appropriate status
+            # approved -> "leave", pending -> "pending"
             simplified_data = [
-                {"date": lr.start_date, "status": "leave"}
+                {
+                    "date": lr.start_date, 
+                    "status": "leave" if lr.status == "approved" else "pending"
+                }
                 for lr in leave_requests
             ]
 

@@ -536,3 +536,82 @@ class NotificationAnalyticsView(APIView):
             "unread_notifications": unread_notifications,
         }
         return Response(data)
+
+
+@swagger_auto_schema(
+    method="post",
+    operation_summary="Milkman Monthly Summary",
+    operation_description="Returns monthly summary for a milkman including working days, leaves, and delivery stats.",
+    request_body=openapi.Schema(
+        type=openapi.TYPE_OBJECT,
+        properties={
+            'milkman_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Milkman ID'),
+            'month': openapi.Schema(type=openapi.TYPE_INTEGER, description='Month (1-12)'),
+            'year': openapi.Schema(type=openapi.TYPE_INTEGER, description='Year (e.g., 2025)'),
+        },
+        required=['milkman_id', 'month', 'year']
+    ),
+    responses={200: openapi.Response(description="Milkman monthly summary")}
+)
+@api_view(["POST"])
+@authentication_classes([CustomJWTAuthentication])
+@permission_classes([IsAuthenticated])
+def milkman_month_summary(request):
+    """
+    API endpoint to return milkman monthly summary.
+    """
+    milkman_id = request.data.get('milkman_id')
+    month = request.data.get('month')
+    year = request.data.get('year')
+    
+    if not milkman_id or not month or not year:
+        return error_response("milkman_id, month, and year are required.")
+    
+    try:
+        milkman = Milkman.objects.get(id=milkman_id)
+    except Milkman.DoesNotExist:
+        return error_response("Milkman not found.", status_code=404)
+    
+    # Calculate date range for the month
+    start_date = date(year, month, 1)
+    _, days_in_month = monthrange(year, month)
+    end_date = date(year, month, days_in_month)
+    
+    # Total working days = all days in the month
+    total_working_days = days_in_month
+    
+    # Count approved leaves for the milkman in the month
+    leaves_taken = MilkmanLeaveRequest.objects.filter(
+        milkman=milkman,
+        start_date__gte=start_date,
+        start_date__lte=end_date,
+        status='approved'
+    ).count()
+    
+    # Get all customers assigned to this milkman
+    assigned_customers = Customer.objects.filter(milkman=milkman)
+    total_customers = assigned_customers.count()
+    
+    # Get delivery records made by this milkman in the month
+    delivery_records = DeliveryRecord.objects.filter(
+        milkman=milkman,
+        date__gte=start_date,
+        date__lte=end_date,
+        status='delivered'
+    )
+    
+    # Count unique dates where at least one delivery was made
+    days_delivered = delivery_records.values('date').distinct().count()
+    
+    # Total deliveries made
+    total_deliveries_made = delivery_records.count()
+    
+    data = {
+        'total_working_days': total_working_days,
+        'leaves_taken': leaves_taken,
+        'days_delivered': days_delivered,
+        'total_customers': total_customers,
+        'total_deliveries_made': total_deliveries_made,
+    }
+    
+    return success_response("Milkman monthly summary fetched successfully", data)
