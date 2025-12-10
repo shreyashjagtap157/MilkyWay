@@ -834,6 +834,15 @@ class VendorCalendarViewSet(viewsets.ViewSet):
         ).first()
         if existing_request:
             return error_response("An extra milk request for this date already exists and is pending or approved.")
+        
+        # Delete any rejected requests for the same date to allow re-requesting
+        # This is needed because of the unique_together constraint on (customer, date, request_type)
+        CustomerRequest.objects.filter(
+            customer=customer,
+            date=date_obj,
+            request_type=REQUEST_TYPE_EXTRA_MILK,
+            status="rejected"
+        ).delete()
 
         # Ensure customer has a milkman for assignment
         assigned_milkman = customer.milkman
