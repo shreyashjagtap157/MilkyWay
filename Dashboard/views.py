@@ -97,23 +97,63 @@ def vendor_dashboard_summary(request):
         )
     ).aggregate(total=Sum('days'))['total'] or 0
 
-    # Total billed amount (sum of bills for customers for the month)
-    # Bills are linked directly to a vendor in the Bill model
-    bills = Bill.objects.filter(
+    # Total billed amount (sum of PAID bills for customers in the date range)
+    # Only count bills that have been paid by customers
+    paid_bills = Bill.objects.filter(
         vendor=vendor,
+        status='paid',
         start_date__gte=start_date,
         end_date__lte=end_date
     )
-    total_billed_amount = bills.aggregate(total=Sum('total_amount'))['total'] or 0
+    total_billed_amount = paid_bills.aggregate(total=Sum('total_amount'))['total'] or Decimal('0')
 
-    # Total overdue amount (sum of unpaid bills for previous months)
-    # Overdue bills: use the Bill.vendor relation and the 'overdue' status
-    overdue_bills = Bill.objects.filter(
-        vendor=vendor,
-        end_date__lt=start_date,
-        status='overdue'
-    )
-    total_overdue_amount = overdue_bills.aggregate(total=Sum('total_amount'))['total'] or 0
+    # Total overdue amount (calculated from unpaid deliveries in the date range)
+    # This calculates the pending bill amount for all customers who have unpaid deliveries
+    customers = Customer.objects.filter(provider=vendor)
+    
+    # Get vendor rates
+    cow_rate = Decimal(str(getattr(vendor, 'cr', 0) or 0))
+    buffalo_rate = Decimal(str(getattr(vendor, 'br', 0) or 0))
+    
+    total_overdue_amount = Decimal('0')
+    
+    for customer in customers:
+        # Get unpaid regular deliveries in date range
+        unpaid_regular = DeliveryRecord.objects.filter(
+            customer=customer,
+            status='delivered',
+            delivery_type='regular',
+            bill_paid=False,
+            date__gte=start_date,
+            date__lte=end_date
+        ).filter(Q(vendor=vendor) | Q(vendor__isnull=True))
+        
+        # Calculate regular delivery amount
+        for delivery in unpaid_regular:
+            has_custom = (delivery.cow_milk_extra and delivery.cow_milk_extra > 0) or \
+                         (delivery.buffalo_milk_extra and delivery.buffalo_milk_extra > 0)
+            if has_custom:
+                cow_qty = Decimal(str(delivery.cow_milk_extra or 0))
+                buffalo_qty = Decimal(str(delivery.buffalo_milk_extra or 0))
+            else:
+                cow_qty = Decimal(str(customer.cow_milk_litre or 0))
+                buffalo_qty = Decimal(str(customer.buffalo_milk_litre or 0))
+            total_overdue_amount += (cow_qty * cow_rate) + (buffalo_qty * buffalo_rate)
+        
+        # Get unpaid extra deliveries in date range
+        unpaid_extra = DeliveryRecord.objects.filter(
+            customer=customer,
+            status='delivered',
+            delivery_type='extra',
+            bill_paid=False,
+            date__gte=start_date,
+            date__lte=end_date
+        ).filter(Q(vendor=vendor) | Q(vendor__isnull=True))
+        
+        for delivery in unpaid_extra:
+            cow_qty = Decimal(str(delivery.cow_milk_extra or 0))
+            buffalo_qty = Decimal(str(delivery.buffalo_milk_extra or 0))
+            total_overdue_amount += (cow_qty * cow_rate) + (buffalo_qty * buffalo_rate)
 
     data = {
         'total_consumer': total_consumer,
