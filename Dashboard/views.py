@@ -334,17 +334,30 @@ def customer_month_summary(request):
     extra_delivery_count = len([d for d in extra_dates if d not in regular_dates])
     total_deliveries = regular_delivery_count + extra_delivery_count
 
-    # Milk delivered: base quantities for regular delivered days + extras from both regular (inline) and extra deliveries
-    base_cow = cow_base * Decimal(str(regular_delivery_count))
-    base_buffalo = buffalo_base * Decimal(str(regular_delivery_count))
-
-    inline_extra_cow = delivered_regular.aggregate(total=Sum('cow_milk_extra'))['total'] or 0
-    inline_extra_buffalo = delivered_regular.aggregate(total=Sum('buffalo_milk_extra'))['total'] or 0
+    # Calculate milk delivered for regular deliveries
+    # For each regular delivery: if it has custom quantities, use those; otherwise use customer defaults
+    total_regular_cow = Decimal('0')
+    total_regular_buffalo = Decimal('0')
+    
+    for delivery in delivered_regular:
+        has_custom_qty = (delivery.cow_milk_extra and delivery.cow_milk_extra > 0) or \
+                         (delivery.buffalo_milk_extra and delivery.buffalo_milk_extra > 0)
+        
+        if has_custom_qty:
+            # Custom quantities override the defaults
+            total_regular_cow += Decimal(str(delivery.cow_milk_extra or 0))
+            total_regular_buffalo += Decimal(str(delivery.buffalo_milk_extra or 0))
+        else:
+            # Use customer's default milk quantities
+            total_regular_cow += cow_base
+            total_regular_buffalo += buffalo_base
+    
+    # Calculate milk delivered for extra deliveries (always use cow_milk_extra/buffalo_milk_extra)
     extra_cow = delivered_extra.aggregate(total=Sum('cow_milk_extra'))['total'] or 0
     extra_buffalo = delivered_extra.aggregate(total=Sum('buffalo_milk_extra'))['total'] or 0
 
-    total_cow_delivered = base_cow + Decimal(str(inline_extra_cow)) + Decimal(str(extra_cow))
-    total_buffalo_delivered = base_buffalo + Decimal(str(inline_extra_buffalo)) + Decimal(str(extra_buffalo))
+    total_cow_delivered = total_regular_cow + Decimal(str(extra_cow))
+    total_buffalo_delivered = total_regular_buffalo + Decimal(str(extra_buffalo))
     total_milk_delivered = total_cow_delivered + total_buffalo_delivered
 
     # Leaves: approved leaves (legacy) or quantity_adjustment with zero quantities

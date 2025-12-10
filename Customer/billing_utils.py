@@ -116,8 +116,19 @@ def get_or_create_customer_bill(customer, vendor):
         
         # Process all unpaid regular deliveries
         for delivery in unpaid_regular:
-            cow_qty = Decimal(str(customer.cow_milk_litre or 0))
-            buffalo_qty = Decimal(str(customer.buffalo_milk_litre or 0))
+            # Check if delivery has custom quantities (cow_milk_extra/buffalo_milk_extra)
+            # If so, use those values; otherwise use customer's default quantities
+            has_custom_qty = (delivery.cow_milk_extra and delivery.cow_milk_extra > 0) or \
+                             (delivery.buffalo_milk_extra and delivery.buffalo_milk_extra > 0)
+            
+            if has_custom_qty:
+                # Custom quantities override the defaults
+                cow_qty = Decimal(str(delivery.cow_milk_extra or 0))
+                buffalo_qty = Decimal(str(delivery.buffalo_milk_extra or 0))
+            else:
+                # Use customer's default milk quantities
+                cow_qty = Decimal(str(customer.cow_milk_litre or 0))
+                buffalo_qty = Decimal(str(customer.buffalo_milk_litre or 0))
             
             if cow_qty > 0:
                 amount = cow_qty * cow_rate
