@@ -79,7 +79,6 @@ def subscribed_customers_list(request):
         response_data = {
             "status": "error",
             "code": status.HTTP_500_INTERNAL_SERVER_ERROR,
-            
             "message": str(e),
         }
         return Response(response_data, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

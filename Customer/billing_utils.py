@@ -18,14 +18,20 @@ logger = logging.getLogger(__name__)
 
 def get_or_create_customer_bill(customer, vendor):
     """
-    Get or create a bill for the customer. This function:
-    1. Looks for an existing pending/unpaid bill for this customer
-    2. If found, updates it with any new unpaid deliveries
-    3. If not found, creates a new bill with all unpaid deliveries
-    4. Returns the bill (or None if no unpaid deliveries exist)
+    Get or create a bill for the customer based on unpaid deliveries.
     
-    This ensures the bill is persisted in the database and updated on each call.
+    Logic:
+    1. Find the last PAID bill's end date for this customer
+    2. If no paid bills exist, use the customer's first delivery date
+    3. Calculate bill from (last_paid_end_date + 1) to today
+    4. Include ALL unpaid deliveries (bill_paid=False) in that range
+    5. Create or update the pending bill with all unpaid deliveries
+    
+    Returns: (Bill, error_message) tuple
     """
+    from django.db.models import Q
+    from datetime import date as date_type
+    
     if not vendor:
         return None, "No vendor assigned to this customer."
     
@@ -33,265 +39,173 @@ def get_or_create_customer_bill(customer, vendor):
     cow_rate = Decimal(str(getattr(vendor, 'cr', 0) or 0))
     buffalo_rate = Decimal(str(getattr(vendor, 'br', 0) or 0))
     
-    # Get all unpaid deliveries that are NOT yet linked to any bill
-    unlinked_regular_deliveries = DeliveryRecord.objects.filter(
+    # Vendor filter: include deliveries where vendor matches OR vendor is NULL
+    vendor_filter = Q(vendor=vendor) | Q(vendor__isnull=True)
+    
+    # Step 1: Find the last PAID bill's end date
+    last_paid_bill = Bill.objects.filter(
         customer=customer,
         vendor=vendor,
+        status='paid'
+    ).order_by('-end_date').first()
+    
+    if last_paid_bill:
+        # Start from day after last paid bill ended
+        start_date = last_paid_bill.end_date + timedelta(days=1)
+    else:
+        # No paid bills - find the first delivery date for this customer
+        first_delivery = DeliveryRecord.objects.filter(
+            vendor_filter,
+            customer=customer,
+            status='delivered'
+        ).order_by('date').first()
+        
+        if first_delivery:
+            start_date = first_delivery.date
+        else:
+            return None, "No deliveries found for this customer."
+    
+    # End date is today
+    end_date = date_type.today()
+    
+    # Step 2: Get ALL unpaid deliveries (bill_paid=False) in the date range
+    unpaid_regular = DeliveryRecord.objects.filter(
+        vendor_filter,
+        customer=customer,
         status='delivered',
         delivery_type='regular',
         bill_paid=False,
-        bill__isnull=True  # Not yet linked to any bill
+        date__gte=start_date,
+        date__lte=end_date
     )
     
-    unlinked_extra_deliveries = DeliveryRecord.objects.filter(
+    unpaid_extra = DeliveryRecord.objects.filter(
+        vendor_filter,
         customer=customer,
-        vendor=vendor,
         status='delivered',
         delivery_type='extra',
         bill_paid=False,
-        bill__isnull=True  # Not yet linked to any bill
+        date__gte=start_date,
+        date__lte=end_date
     )
     
-    # Check if there's an existing pending bill for this customer
-    existing_bill = Bill.objects.filter(
-        customer=customer,
-        vendor=vendor,
-        status='pending'
-    ).order_by('-created_at').first()
+    if not unpaid_regular.exists() and not unpaid_extra.exists():
+        return None, "No unpaid deliveries found for this customer."
     
+    # Step 3: Delete any existing pending bills and their line items for this customer
+    # (we'll recreate with all unpaid deliveries)
     with transaction.atomic():
-        if existing_bill:
-            # Update existing bill with any new unlinked deliveries
-            bill = existing_bill
-            new_amount = Decimal('0')
-            
-            # Process unlinked regular deliveries
-            for delivery in unlinked_regular_deliveries:
-                cow_qty = Decimal(str(customer.cow_milk_litre or 0))
-                buffalo_qty = Decimal(str(customer.buffalo_milk_litre or 0))
-                
-                # Create line item for cow milk
-                if cow_qty > 0:
-                    amount = cow_qty * cow_rate
-                    new_amount += amount
-                    BillLineItem.objects.create(
-                        bill=bill,
-                        delivery_record=delivery,
-                        date=delivery.date,
-                        description='Cow milk delivery',
-                        quantity=cow_qty,
-                        rate=cow_rate,
-                        amount=amount,
-                        is_extra=False,
-                        is_leave=False,
-                        is_unsuccessful=False
-                    )
-                
-                # Create line item for buffalo milk
-                if buffalo_qty > 0:
-                    amount = buffalo_qty * buffalo_rate
-                    new_amount += amount
-                    BillLineItem.objects.create(
-                        bill=bill,
-                        delivery_record=delivery,
-                        date=delivery.date,
-                        description='Buffalo milk delivery',
-                        quantity=buffalo_qty,
-                        rate=buffalo_rate,
-                        amount=amount,
-                        is_extra=False,
-                        is_leave=False,
-                        is_unsuccessful=False
-                    )
-                
-                # Link delivery to bill and mark as unpaid (pending)
-                delivery.bill = bill
-                delivery.bill_paid = False
-                delivery.save(update_fields=['bill', 'bill_paid'])
-            
-            # Process unlinked extra deliveries
-            for delivery in unlinked_extra_deliveries:
-                extra_cow = Decimal(str(delivery.cow_milk_extra or 0))
-                extra_buffalo = Decimal(str(delivery.buffalo_milk_extra or 0))
-                
-                if extra_cow > 0:
-                    amount = extra_cow * cow_rate
-                    new_amount += amount
-                    BillLineItem.objects.create(
-                        bill=bill,
-                        delivery_record=delivery,
-                        date=delivery.date,
-                        description='Extra cow milk delivery',
-                        quantity=extra_cow,
-                        rate=cow_rate,
-                        amount=amount,
-                        is_extra=True,
-                        is_leave=False,
-                        is_unsuccessful=False
-                    )
-                
-                if extra_buffalo > 0:
-                    amount = extra_buffalo * buffalo_rate
-                    new_amount += amount
-                    BillLineItem.objects.create(
-                        bill=bill,
-                        delivery_record=delivery,
-                        date=delivery.date,
-                        description='Extra buffalo milk delivery',
-                        quantity=extra_buffalo,
-                        rate=buffalo_rate,
-                        amount=amount,
-                        is_extra=True,
-                        is_leave=False,
-                        is_unsuccessful=False
-                    )
-                
-                # Link delivery to bill and mark as unpaid (pending)
-                delivery.bill = bill
-                delivery.bill_paid = False
-                delivery.save(update_fields=['bill', 'bill_paid'])
-            
-            # Update bill total and date range if new deliveries were added
-            if new_amount > 0:
-                bill.total_amount = (bill.total_amount or Decimal('0')) + new_amount
-
-                # Update date range to include new deliveries
-                all_line_items = bill.line_items.all()
-                if all_line_items.exists():
-                    dates = list(all_line_items.values_list('date', flat=True))
-                    bill.start_date = min(dates)
-                    bill.end_date = max(dates)
-
-                bill.save(update_fields=['total_amount', 'start_date', 'end_date'])
-                logger.info("Updated existing bill %s: +%s", bill.id, new_amount)
-
-            return bill, None
+        # Delete existing pending bills for this customer
+        Bill.objects.filter(
+            customer=customer,
+            vendor=vendor,
+            status='pending'
+        ).delete()
         
-        else:
-            # No existing pending bill - check if there are any unpaid deliveries
-            all_regular = DeliveryRecord.objects.filter(
-                customer=customer,
-                vendor=vendor,
-                status='delivered',
-                delivery_type='regular',
-                bill_paid=False
-            )
+        # Create new bill
+        bill = Bill.objects.create(
+            customer=customer,
+            vendor=vendor,
+            start_date=start_date,
+            end_date=end_date,
+            total_amount=Decimal('0'),
+            status='pending'
+        )
+        
+        total_amount = Decimal('0')
+        
+        # Process all unpaid regular deliveries
+        for delivery in unpaid_regular:
+            cow_qty = Decimal(str(customer.cow_milk_litre or 0))
+            buffalo_qty = Decimal(str(customer.buffalo_milk_litre or 0))
             
-            all_extra = DeliveryRecord.objects.filter(
-                customer=customer,
-                vendor=vendor,
-                status='delivered',
-                delivery_type='extra',
-                bill_paid=False
-            )
+            if cow_qty > 0:
+                amount = cow_qty * cow_rate
+                total_amount += amount
+                BillLineItem.objects.create(
+                    bill=bill,
+                    delivery_record=delivery,
+                    date=delivery.date,
+                    description='Cow milk delivery',
+                    quantity=cow_qty,
+                    rate=cow_rate,
+                    amount=amount,
+                    is_extra=False,
+                    is_leave=False,
+                    is_unsuccessful=False
+                )
             
-            if not all_regular.exists() and not all_extra.exists():
-                return None, "No unpaid deliveries found for this customer."
+            if buffalo_qty > 0:
+                amount = buffalo_qty * buffalo_rate
+                total_amount += amount
+                BillLineItem.objects.create(
+                    bill=bill,
+                    delivery_record=delivery,
+                    date=delivery.date,
+                    description='Buffalo milk delivery',
+                    quantity=buffalo_qty,
+                    rate=buffalo_rate,
+                    amount=amount,
+                    is_extra=False,
+                    is_leave=False,
+                    is_unsuccessful=False
+                )
             
-            # Calculate date range from all unpaid deliveries
-            all_dates = list(all_regular.values_list('date', flat=True)) + list(all_extra.values_list('date', flat=True))
-            start_date = min(all_dates) if all_dates else date.today()
-            end_date = max(all_dates) if all_dates else date.today()
+            # Link delivery to this bill
+            delivery.bill = bill
+            delivery.save(update_fields=['bill'])
+        
+        # Process all unpaid extra deliveries
+        for delivery in unpaid_extra:
+            extra_cow = Decimal(str(delivery.cow_milk_extra or 0))
+            extra_buffalo = Decimal(str(delivery.buffalo_milk_extra or 0))
             
-            # Create new bill
-            bill = Bill.objects.create(
-                customer=customer,
-                vendor=vendor,
-                start_date=start_date,
-                end_date=end_date,
-                total_amount=Decimal('0'),
-                status='pending'
-            )
+            if extra_cow > 0:
+                amount = extra_cow * cow_rate
+                total_amount += amount
+                BillLineItem.objects.create(
+                    bill=bill,
+                    delivery_record=delivery,
+                    date=delivery.date,
+                    description='Extra cow milk delivery',
+                    quantity=extra_cow,
+                    rate=cow_rate,
+                    amount=amount,
+                    is_extra=True,
+                    is_leave=False,
+                    is_unsuccessful=False
+                )
             
-            total_amount = Decimal('0')
+            if extra_buffalo > 0:
+                amount = extra_buffalo * buffalo_rate
+                total_amount += amount
+                BillLineItem.objects.create(
+                    bill=bill,
+                    delivery_record=delivery,
+                    date=delivery.date,
+                    description='Extra buffalo milk delivery',
+                    quantity=extra_buffalo,
+                    rate=buffalo_rate,
+                    amount=amount,
+                    is_extra=True,
+                    is_leave=False,
+                    is_unsuccessful=False
+                )
             
-            # Process all regular deliveries
-            for delivery in all_regular:
-                cow_qty = Decimal(str(customer.cow_milk_litre or 0))
-                buffalo_qty = Decimal(str(customer.buffalo_milk_litre or 0))
-                
-                if cow_qty > 0:
-                    amount = cow_qty * cow_rate
-                    total_amount += amount
-                    BillLineItem.objects.create(
-                        bill=bill,
-                        delivery_record=delivery,
-                        date=delivery.date,
-                        description='Cow milk delivery',
-                        quantity=cow_qty,
-                        rate=cow_rate,
-                        amount=amount,
-                        is_extra=False,
-                        is_leave=False,
-                        is_unsuccessful=False
-                    )
-                
-                if buffalo_qty > 0:
-                    amount = buffalo_qty * buffalo_rate
-                    total_amount += amount
-                    BillLineItem.objects.create(
-                        bill=bill,
-                        delivery_record=delivery,
-                        date=delivery.date,
-                        description='Buffalo milk delivery',
-                        quantity=buffalo_qty,
-                        rate=buffalo_rate,
-                        amount=amount,
-                        is_extra=False,
-                        is_leave=False,
-                        is_unsuccessful=False
-                    )
-                
-                delivery.bill = bill
-                delivery.bill_paid = False
-                delivery.save(update_fields=['bill', 'bill_paid'])
-            
-            # Process all extra deliveries
-            for delivery in all_extra:
-                extra_cow = Decimal(str(delivery.cow_milk_extra or 0))
-                extra_buffalo = Decimal(str(delivery.buffalo_milk_extra or 0))
-                
-                if extra_cow > 0:
-                    amount = extra_cow * cow_rate
-                    total_amount += amount
-                    BillLineItem.objects.create(
-                        bill=bill,
-                        delivery_record=delivery,
-                        date=delivery.date,
-                        description='Extra cow milk delivery',
-                        quantity=extra_cow,
-                        rate=cow_rate,
-                        amount=amount,
-                        is_extra=True,
-                        is_leave=False,
-                        is_unsuccessful=False
-                    )
-                
-                if extra_buffalo > 0:
-                    amount = extra_buffalo * buffalo_rate
-                    total_amount += amount
-                    BillLineItem.objects.create(
-                        bill=bill,
-                        delivery_record=delivery,
-                        date=delivery.date,
-                        description='Extra buffalo milk delivery',
-                        quantity=extra_buffalo,
-                        rate=buffalo_rate,
-                        amount=amount,
-                        is_extra=True,
-                        is_leave=False,
-                        is_unsuccessful=False
-                    )
-                
-                delivery.bill = bill
-                delivery.bill_paid = False
-                delivery.save(update_fields=['bill', 'bill_paid'])
-            
-            bill.total_amount = total_amount
-            bill.save(update_fields=['total_amount'])
-            logger.info("Created bill %s for customer %s amount=%s", bill.id, customer.id, total_amount)
+            # Link delivery to this bill
+            delivery.bill = bill
+            delivery.save(update_fields=['bill'])
+        
+        # Update bill total
+        bill.total_amount = total_amount
+        bill.save(update_fields=['total_amount'])
+        
+        logger.info("Created bill %s for customer %s: start=%s, end=%s, amount=%s, items=%d",
+                    bill.id, customer.id, start_date, end_date, total_amount,
+                    unpaid_regular.count() + unpaid_extra.count())
+        
+        return bill, None
 
-            return bill, None
 
 def generate_bill_for_period(customer, vendor, start_date, end_date, payment=None):
     """

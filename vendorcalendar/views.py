@@ -64,18 +64,9 @@ class VendorCalendarViewSet(viewsets.ViewSet):
         customer_request.extra_milk_delivery_milkman = milkman
         customer_request.save()
 
-        # Optionally, update DeliveryRecord if it exists for this request
-        DeliveryRecord.objects.update_or_create(
-            customer=customer_request.customer,
-            date=customer_request.date,
-            delivery_type="extra",
-            defaults={
-                'vendor': customer_request.vendor,
-                'milkman': milkman,
-                'cow_milk_extra': getattr(customer_request, 'cow_milk_extra', 0) or 0,
-                'buffalo_milk_extra': getattr(customer_request, 'buffalo_milk_extra', 0) or 0,
-            }
-        )
+        # NOTE: Do NOT create DeliveryRecord here.
+        # DeliveryRecord for extra milk should ONLY be created when the milkman
+        # marks the delivery as completed via mark_extra_milk_delivery endpoint.
 
         return success_response("Milkman assigned successfully.", CustomerRequestSerializer(customer_request).data)
 
@@ -497,12 +488,14 @@ class VendorCalendarViewSet(viewsets.ViewSet):
         # Build unified calendar data
         calendar_data = []
         
-        # Add actual delivery records
+        # Add actual delivery records (ONLY regular deliveries)
+        # Extra milk delivery status is shown via CustomerRequest logic below
         for record in delivery_records:
-            calendar_data.append({
-                "date": record.date.strftime("%Y-%m-%d"),
-                "status": record.status,
-            })
+            if record.delivery_type == 'regular':
+                calendar_data.append({
+                    "date": record.date.strftime("%Y-%m-%d"),
+                    "status": record.status,
+                })
 
         # Add approved customer leave requests only (not milkman leaves)
         for req in approved_requests:
@@ -1080,30 +1073,11 @@ class DistributorCalendarViewSet(viewsets.ViewSet):
                 defaults=defaults
             )
 
-            # Update associated CustomerRequest status if this was an approved extra milk request
-            # This ensures the calendar and other views know the extra milk was actually delivered
-            try:
-                extra_request = CustomerRequest.objects.filter(
-                    customer=customer,
-                    date=date,
-                    request_type='extra_milk',
-                    status='approved'
-                ).first()
-
-                if extra_request:
-                    if delivery_status == 'delivered':
-                        extra_request.extra_milk_delivery_status = 'delivered'
-                    else:
-                        # Map 'cancelled' or other statuses to 'unsuccessful' for the request
-                        extra_request.extra_milk_delivery_status = 'unsuccessful'
-                    
-                    extra_request.extra_milk_delivery_marked_at = timezone.now()
-                    extra_request.save()
-                    logger.info("Updated extra milk request %s delivery status to %s", extra_request.id, extra_request.extra_milk_delivery_status)
-            except Exception as e:
-                # Log error but don't fail the delivery record creation
-                logger.error("Failed to update extra milk request status: %s", str(e))
-
+            # NOTE: Extra milk delivery status should ONLY be updated via the dedicated
+            # mark_extra_milk_delivery endpoint, NOT here. This ensures:
+            # 1. Regular deliveries only create 'regular' type delivery records
+            # 2. Extra milk deliveries only create 'extra' type delivery records
+            # 3. No accidental duplication of records
 
             # Update response message based on status
             if delivery_status == "delivered":

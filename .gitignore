@@ -1,11 +1,9 @@
 .env
-*.env
-*.json
-milkyway-5e3e9-firebase-adminsdk-fbsvc-d764a5129f.json
 __pycache__/
 *.pyc
-migrations/
 db.sqlite3
 /static/
 /media/
-requirements.txt
+replacements.txt
+logs/
+*.log

@@ -358,13 +358,15 @@ def customer_month_summary(request):
         Q(request_type='quantity_adjustment', cow_milk_extra=0, buffalo_milk_extra=0)
     ).count()
 
-    # Unpaid amount for deliveries in this month: pending bills, line items within month
-    unpaid_amount = BillLineItem.objects.filter(
-        bill__customer=customer,
-        bill__status='pending',
-        date__gte=start_date,
-        date__lte=end_date
-    ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+    # Calculate bill amount for the month using vendor rates (from delivered quantities)
+    # This ensures consistency with the bills endpoint calculation
+    vendor = customer.provider
+    cow_rate = Decimal(str(getattr(vendor, 'cr', 0) or 0)) if vendor else Decimal('0')
+    buffalo_rate = Decimal(str(getattr(vendor, 'br', 0) or 0)) if vendor else Decimal('0')
+    
+    # Bill amount = total milk delivered × respective rates
+    # Note: total_cow_delivered and total_buffalo_delivered already include base + extras
+    bill_amount = (total_cow_delivered * cow_rate) + (total_buffalo_delivered * buffalo_rate)
 
     data = {
         'customer_id': customer.id,
@@ -373,7 +375,7 @@ def customer_month_summary(request):
         'total_milk_delivered_litres': float(total_milk_delivered),
         'total_deliveries': total_deliveries,
         'leaves_count': leaves_count,
-        'unpaid_amount': float(unpaid_amount),
+        'unpaid_amount': float(bill_amount),  # Monthly bill based on delivered quantities × vendor rates
         'cow_milk_delivered_litres': float(total_cow_delivered),
         'buffalo_milk_delivered_litres': float(total_buffalo_delivered),
     }
